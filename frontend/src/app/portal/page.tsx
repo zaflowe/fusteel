@@ -10,7 +10,7 @@ import { User, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
 
-const API_URL = 'http://127.0.0.1:8000/api';
+const API_URL = '/api';
 
 export default function PortalLoginPage() {
   const router = useRouter();

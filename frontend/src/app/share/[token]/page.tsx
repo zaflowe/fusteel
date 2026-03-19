@@ -13,7 +13,7 @@ import {
   Loader2, Folder, User, Clock, Tag, AlertCircle, ChevronRight
 } from 'lucide-react';
 
-const API_URL = 'http://127.0.0.1:8000/api';
+const API_URL = '/api';
 
 interface Project {
   id: string;

@@ -29,16 +29,10 @@ def search_projects(db: Session, keyword: str = "", tags: list[str] = None):
     query = db.query(models.Project)
     results = query.all()
     
-    # DEBUG: 打印查询参数
-    print(f"\n[DEBUG] Search keyword: '{keyword}'")
-    print(f"[DEBUG] Tags filter: {tags}")
-    print(f"[DEBUG] Total projects before filter: {len(results)}")
-    
     # 关键词搜索：使用 Python 内存过滤
     if keyword:
         # 数据清洗：剥离 # 号，转小写
         search_term = keyword.replace("#", "").strip().lower()
-        print(f"[DEBUG] Cleaned search term: '{search_term}'")
         
         filtered = []
         for project in results:
@@ -59,8 +53,6 @@ def search_projects(db: Session, keyword: str = "", tags: list[str] = None):
         for tag in tags:
             clean_tag = tag.replace("#", "").strip().lower()
             results = [p for p in results if any(clean_tag in t.replace("#", "").lower() for t in (p.tags or []))]
-    
-    print(f"[DEBUG] Found {len(results)} results after filter\n")
     
     return results
 

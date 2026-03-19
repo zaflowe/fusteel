@@ -10,7 +10,7 @@ import { Loader2, Upload, X, Image as ImageIcon } from 'lucide-react';
 import axios from 'axios';
 import { toast } from 'sonner';
 
-const API_URL = 'http://127.0.0.1:8000/api';
+const API_URL = '/api';
 
 interface UpdateFormProps {
   projectId: string;

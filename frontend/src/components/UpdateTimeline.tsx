@@ -12,7 +12,7 @@ import Thumbnails from "yet-another-react-lightbox/plugins/thumbnails";
 import "yet-another-react-lightbox/plugins/thumbnails.css";
 import Zoom from "yet-another-react-lightbox/plugins/zoom";
 
-const API_URL = 'http://127.0.0.1:8000';
+const API_URL = '';
 
 interface ProjectUpdate {
   id: string;
