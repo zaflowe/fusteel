@@ -10,7 +10,7 @@ import { Bot, Check, X, Clock, HelpCircle } from 'lucide-react';
 import axios from 'axios';
 import { toast } from 'sonner';
 
-const API_URL = 'http://127.0.0.1:8000/api';
+const API_URL = '/api';
 
 export default function AISchedulerPage() {
   const [actions, setActions] = useState<any[]>([]);
@@ -81,7 +81,7 @@ export default function AISchedulerPage() {
             <ActionCard 
               key={action.id} 
               action={action} 
-              onApprove={(payload) => handleApprove(action.id, payload)}
+              onApprove={(payload: any) => handleApprove(action.id, payload)}
               onReject={() => handleReject(action.id)}
             />
           ))}

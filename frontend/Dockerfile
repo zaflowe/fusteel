@@ -1,6 +1,9 @@
-FROM node:18-alpine
+FROM node:20-alpine
 
 WORKDIR /app
+
+# 使用阿里云 npm 镜像加速
+RUN npm config set registry https://registry.npmmirror.com
 
 # 安装依赖
 COPY package*.json ./
