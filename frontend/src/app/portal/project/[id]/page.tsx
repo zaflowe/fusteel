@@ -18,7 +18,7 @@ import { format } from 'date-fns';
 import UpdateForm from '@/components/UpdateForm';
 import UpdateTimeline from '@/components/UpdateTimeline';
 
-const API_URL = 'http://127.0.0.1:8000/api';
+const API_URL = '/api';
 
 type FileType = 'application' | 'ppt' | 'free_resource';
 

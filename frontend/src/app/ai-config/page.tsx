@@ -10,7 +10,7 @@ import { toast } from 'sonner';
 import axios from 'axios';
 import { Save, Plus, Trash2, CheckCircle, Sparkles, Eye, EyeOff } from 'lucide-react';
 
-const API_URL = 'http://127.0.0.1:8000/api';
+const API_URL = '/api';
 
 interface AIConfig {
   id: string;
