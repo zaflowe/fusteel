@@ -10,13 +10,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { 
   UploadCloud, FileText, ArrowLeft, X, 
   User, Users, Calendar, Trash2, Download, File, FileSpreadsheet, 
-  Presentation, Loader2, Archive, Tag, Camera, LogOut
+  Presentation, Loader2, Archive, Tag, Camera, LogOut, Clock
 } from 'lucide-react';
 import axios from 'axios';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import UpdateForm from '@/components/UpdateForm';
 import UpdateTimeline from '@/components/UpdateTimeline';
+import ProjectCycleBadge from '@/components/ProjectCycleBadge';
+import FilePoolSection from '@/components/FilePoolSection';
 
 const API_URL = '/api';
 
@@ -42,6 +44,8 @@ interface Project {
   status: string;
   tags: string[];
   created_at: string;
+  end_date?: string | null;
+  delay_reason?: string | null;
 }
 
 export default function PortalProjectDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -53,8 +57,6 @@ export default function PortalProjectDetailPage({ params }: { params: Promise<{ 
   const [files, setFiles] = useState<ProjectFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState<FileType | null>(null);
-  const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
-  const [downloading, setDownloading] = useState(false);
   const [updates, setUpdates] = useState<any[]>([]);
   const [updatesLoading, setUpdatesLoading] = useState(false);
 
@@ -180,69 +182,24 @@ export default function PortalProjectDetailPage({ params }: { params: Promise<{ 
     }
   };
 
-  // 处理文件选择
-  const toggleFileSelection = (fileId: string) => {
-    const newSelected = new Set(selectedFiles);
-    if (newSelected.has(fileId)) {
-      newSelected.delete(fileId);
-    } else {
-      newSelected.add(fileId);
-    }
-    setSelectedFiles(newSelected);
-  };
-
-  // 下载选中文件
-  const handleDownloadSelected = async () => {
-    if (selectedFiles.size === 0) {
-      toast.error('请先选择要下载的文件');
-      return;
-    }
-
-    setDownloading(true);
+  // 处理文件下载
+  const handleDownloadSingle = async (fileId: string, originalName: string) => {
     try {
-      const selectedIds = Array.from(selectedFiles);
-      
-      if (selectedIds.length === 1) {
-        // 单文件直接下载
-        const fileId = selectedIds[0];
-        const response = await axios.get(`${API_URL}/files/${fileId}/download`, {
-          responseType: 'blob'
-        });
-        
-        const file = files.find(f => f.id === fileId);
-        const blob = new Blob([response.data]);
-        const url = window.URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = file?.original_name || '下载文件';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        window.URL.revokeObjectURL(url);
-        
-        toast.success('✅ 文件下载成功');
-      } else {
-        // 多文件打包下载
-        const response = await axios.post(`${API_URL}/files/download/batch`, selectedIds, {
-          responseType: 'blob'
-        });
-        
-        const blob = new Blob([response.data], { type: 'application/zip' });
-        const url = window.URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `下载文件.zip`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        window.URL.revokeObjectURL(url);
-        
-        toast.success('✅ 批量下载成功');
-      }
+      const response = await axios.get(`${API_URL}/files/${fileId}/download`, {
+        responseType: 'blob'
+      });
+      const blob = new Blob([response.data]);
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = originalName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      toast.success('✅ 文件下载成功');
     } catch (error) {
-      toast.error('❌ 下载失败：未找到文件');
-    } finally {
-      setDownloading(false);
+      toast.error('❌ 下载失败');
     }
   };
 
@@ -251,9 +208,6 @@ export default function PortalProjectDetailPage({ params }: { params: Promise<{ 
     try {
       await axios.delete(`${API_URL}/files/${fileId}`);
       toast.success('删除成功');
-      const newSelected = new Set(selectedFiles);
-      newSelected.delete(fileId);
-      setSelectedFiles(newSelected);
       await fetchDetails();
     } catch (error) {
       toast.error('删除失败');
@@ -302,7 +256,12 @@ export default function PortalProjectDetailPage({ params }: { params: Promise<{ 
         <div className="bg-card p-6 rounded-xl border shadow-sm">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <div>
-              <h1 className="text-2xl font-bold">{project.title}</h1>
+              <div className="flex items-center gap-3 flex-wrap">
+                <h1 className="text-2xl font-bold">{project.title}</h1>
+                {project.end_date && (
+                  <ProjectCycleBadge createdAt={project.created_at} endDate={project.end_date} compact />
+                )}
+              </div>
               <div className="flex items-center gap-3 mt-2 text-muted-foreground">
                 <Badge variant="secondary">{project.department}</Badge>
                 <StatusBadge status={project.status} />
@@ -338,6 +297,27 @@ export default function PortalProjectDetailPage({ params }: { params: Promise<{ 
             </div>
           </div>
 
+          {/* 项目周期区域（外部人员只读） */}
+          <div className="mt-4 p-3 bg-secondary/30 rounded-lg flex items-center gap-2 flex-wrap">
+            <Clock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+            <span className="text-sm text-muted-foreground">项目周期：</span>
+            {project.end_date ? (
+              <>
+                <span className="text-sm font-medium">
+                  {format(new Date(project.created_at), 'yyyy/MM/dd')} 至 {format(new Date(project.end_date), 'yyyy/MM/dd')}
+                </span>
+                {project.delay_reason && (
+                  <span className="text-orange-600 text-xs" title={project.delay_reason}>
+                    （延期：{project.delay_reason.length > 20 ? project.delay_reason.slice(0, 20) + '…' : project.delay_reason}）
+                  </span>
+                )}
+              </>
+            ) : (
+              <span className="text-sm text-muted-foreground">未设置结项时间</span>
+            )}
+            {/* 外部人员无权限编辑，因此不渲染编辑按钮 */}
+          </div>
+
           {/* 标签展示（只读） */}
           {project.tags && project.tags.length > 0 && (
             <div className="mt-6 pt-6 border-t">
@@ -358,102 +338,20 @@ export default function PortalProjectDetailPage({ params }: { params: Promise<{ 
 
         {/* 资料池区块 */}
         <section className="space-y-4">
-          <div className="flex justify-between items-center">
+          <div className="flex justify-between items-center mb-4">
             <h2 className="text-2xl font-bold flex items-center gap-2">
               <Archive className="h-6 w-6 text-primary" /> 
               项目资料池
             </h2>
-            
-            {selectedFiles.size > 0 && (
-              <Button 
-                onClick={handleDownloadSelected} 
-                disabled={downloading}
-                className="gap-2"
-              >
-                {downloading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Download className="h-4 w-4" />
-                )}
-                下载选中文件 ({selectedFiles.size})
-              </Button>
-            )}
           </div>
 
-          <Tabs defaultValue="application" className="w-full">
-            <TabsList className="grid w-full grid-cols-3">
-              <TabsTrigger value="application" className="gap-2">
-                <FileText className="h-4 w-4" />
-                立项申请表
-                {filesByType.application.length > 0 && (
-                  <Badge variant="secondary" className="ml-1">{filesByType.application.length}</Badge>
-                )}
-              </TabsTrigger>
-              <TabsTrigger value="ppt" className="gap-2">
-                <Presentation className="h-4 w-4" />
-                结项 PPT
-                {filesByType.ppt.length > 0 && (
-                  <Badge variant="secondary" className="ml-1">{filesByType.ppt.length}</Badge>
-                )}
-              </TabsTrigger>
-              <TabsTrigger value="free_resource" className="gap-2">
-                <FileSpreadsheet className="h-4 w-4" />
-                自由资料池
-                {filesByType.free_resource.length > 0 && (
-                  <Badge variant="secondary" className="ml-1">{filesByType.free_resource.length}</Badge>
-                )}
-              </TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="application">
-              <FileTypeSection
-                title="立项申请表"
-                description="上传项目的立项申请表（PDF格式），每个项目只能有一份"
-                fileType="application"
-                files={filesByType.application}
-                accept=".pdf"
-                uploading={uploading === 'application'}
-                selectedFiles={selectedFiles}
-                onToggleSelect={toggleFileSelection}
-                onUpload={handleUpload}
-                onDelete={handleDelete}
-                formatFileSize={formatFileSize}
-              />
-            </TabsContent>
-
-            <TabsContent value="ppt">
-              <FileTypeSection
-                title="结项 PPT"
-                description="上传结项汇报PPT（PPT/PPTX格式），上传后将自动更新项目状态为待结项"
-                fileType="ppt"
-                files={filesByType.ppt}
-                accept=".ppt,.pptx"
-                uploading={uploading === 'ppt'}
-                selectedFiles={selectedFiles}
-                onToggleSelect={toggleFileSelection}
-                onUpload={handleUpload}
-                onDelete={handleDelete}
-                formatFileSize={formatFileSize}
-              />
-            </TabsContent>
-
-            <TabsContent value="free_resource">
-              <FileTypeSection
-                title="自由资料池"
-                description="上传任意类型的辅助资料（照片、文档、表格等），可上传多份"
-                fileType="free_resource"
-                files={filesByType.free_resource}
-                accept="*/*"
-                uploading={uploading === 'free_resource'}
-                selectedFiles={selectedFiles}
-                onToggleSelect={toggleFileSelection}
-                onUpload={handleUpload}
-                onDelete={handleDelete}
-                formatFileSize={formatFileSize}
-                allowMultiple={true}
-              />
-            </TabsContent>
-          </Tabs>
+          <FilePoolSection 
+            files={files} 
+            uploadingType={uploading} 
+            onUpload={handleUpload} 
+            onDownload={handleDownloadSingle} 
+            onDelete={handleDelete} 
+          />
         </section>
 
         {/* 项目固化记录区块 */}
@@ -491,137 +389,6 @@ export default function PortalProjectDetailPage({ params }: { params: Promise<{ 
         </section>
       </main>
     </div>
-  );
-}
-
-// 文件类型区块组件
-interface FileTypeSectionProps {
-  title: string;
-  description: string;
-  fileType: FileType;
-  files: ProjectFile[];
-  accept: string;
-  uploading: boolean;
-  selectedFiles: Set<string>;
-  onToggleSelect: (fileId: string) => void;
-  onUpload: (fileType: FileType, file: File) => void;
-  onDelete: (fileId: string) => void;
-  formatFileSize: (bytes: number) => string;
-  allowMultiple?: boolean;
-}
-
-function FileTypeSection({
-  title,
-  description,
-  fileType,
-  files,
-  accept,
-  uploading,
-  selectedFiles,
-  onToggleSelect,
-  onUpload,
-  onDelete,
-  formatFileSize,
-  allowMultiple = false
-}: FileTypeSectionProps) {
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      onUpload(fileType, file);
-    }
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-  };
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-lg">{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {/* 上传区域 */}
-        <div 
-          className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${
-            uploading ? 'bg-primary/5 border-primary' : 'border-border hover:border-primary/50 hover:bg-secondary/50'
-          }`}
-          onClick={() => !uploading && fileInputRef.current?.click()}
-        >
-          <input
-            type="file"
-            ref={fileInputRef}
-            accept={accept}
-            className="hidden"
-            onChange={handleFileChange}
-          />
-          
-          {uploading ? (
-            <div className="flex flex-col items-center gap-2">
-              <Loader2 className="h-8 w-8 animate-spin text-primary" />
-              <span className="text-sm text-muted-foreground">正在上传...</span>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center gap-2">
-              <UploadCloud className="h-8 w-8 text-muted-foreground" />
-              <span className="text-sm font-medium">点击上传文件</span>
-              <span className="text-xs text-muted-foreground">
-                支持格式: {accept === '*/*' ? '任意文件' : accept}
-              </span>
-            </div>
-          )}
-        </div>
-
-        {/* 文件列表 */}
-        {files.length > 0 ? (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between px-2">
-              <span className="text-sm text-muted-foreground">共 {files.length} 个文件</span>
-            </div>
-            
-            {files.map((file) => (
-              <div 
-                key={file.id} 
-                className="flex items-center gap-3 p-3 border rounded-lg hover:bg-secondary/30 transition-colors"
-              >
-                <Checkbox 
-                  checked={selectedFiles.has(file.id)}
-                  onCheckedChange={() => onToggleSelect(file.id)}
-                />
-                
-                <File className="h-5 w-5 text-muted-foreground flex-shrink-0" />
-                
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium truncate">{file.original_name}</div>
-                  <div className="text-xs text-muted-foreground flex gap-2">
-                    <span>{formatFileSize(file.file_size)}</span>
-                    <span>•</span>
-                    <span>{format(new Date(file.uploaded_at), 'yyyy-MM-dd HH:mm')}</span>
-                    <span>•</span>
-                    <span>{file.uploaded_by}</span>
-                  </div>
-                </div>
-                
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 text-destructive hover:text-destructive"
-                  onClick={() => onDelete(file.id)}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="text-center py-8 text-muted-foreground">
-            暂无文件，请点击上方上传
-          </div>
-        )}
-      </CardContent>
-    </Card>
   );
 }
 

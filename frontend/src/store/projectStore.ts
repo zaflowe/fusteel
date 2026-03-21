@@ -27,6 +27,7 @@ export interface Milestone {
 
 export interface Project {
   id: string;
+  project_code?: string;  // 项目编号，如 JGCX-2026-014
   title: string;
   department?: string;
   leader?: string;
@@ -34,8 +35,20 @@ export interface Project {
   tags: string[];
   status: ProjectStatus;
   created_at: string;
+  end_date?: string;  // 结项时间
+  delay_reason?: string;  // 延期原因
   files: ProjectFile[];
   milestones: Milestone[];
+}
+
+export interface ProjectDelayHistory {
+  id: string;
+  project_id: string;
+  old_end_date?: string;
+  new_end_date: string;
+  reason: string;
+  changed_by: string;
+  created_at: string;
 }
 
 interface ProjectStore {

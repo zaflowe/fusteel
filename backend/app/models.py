@@ -32,6 +32,7 @@ class Project(Base):
     __tablename__ = "projects"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_code = Column(String, unique=True, nullable=True, index=True)  # 项目编号，如 JGCX-2026-014
     title = Column(String, index=True, nullable=False, unique=True)
     department = Column(String)
     leader = Column(String, nullable=True)              # 项目负责人
@@ -39,11 +40,14 @@ class Project(Base):
     tags = Column(JSONB, default=list)                  # e.g. ["#实施中", "#管理创新"]
     status = Column(SQLEnum(ProjectStatus), default=ProjectStatus.in_progress)
     created_at = Column(DateTime, default=datetime.utcnow)
+    end_date = Column(DateTime, nullable=True, comment="结项时间")  # 项目结束时间
+    delay_reason = Column(String, nullable=True, comment="当前延期原因")  # 最近一次延期原因
 
     files = relationship("ProjectFile", back_populates="project", cascade="all, delete-orphan")
     milestones = relationship("Milestone", back_populates="project", cascade="all, delete-orphan", order_by="Milestone.created_at")
     updates = relationship("ProjectUpdate", back_populates="project", cascade="all, delete-orphan", order_by="ProjectUpdate.created_at.desc()")
     ai_actions = relationship("AIPendingAction", back_populates="project", cascade="all, delete-orphan")
+    delay_history = relationship("ProjectDelayHistory", back_populates="project", cascade="all, delete-orphan", order_by="ProjectDelayHistory.created_at.desc()")
 
 class ProjectFile(Base):
     __tablename__ = "project_files"
@@ -121,3 +125,21 @@ class AIConfig(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ProjectDelayHistory(Base):
+    """
+    项目周期延期历史记录表
+    记录每次项目结项时间的变更历史
+    """
+    __tablename__ = "project_delay_history"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
+    old_end_date = Column(DateTime, nullable=True, comment="原结项时间")
+    new_end_date = Column(DateTime, nullable=False, comment="新结项时间")
+    reason = Column(String, nullable=False, comment="延期原因")
+    changed_by = Column(String, default="系统", comment="修改人")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, comment="修改时间")
+
+    project = relationship("Project", back_populates="delay_history")

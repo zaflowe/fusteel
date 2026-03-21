@@ -14,6 +14,7 @@ import {
   Camera, ChevronRight
 } from 'lucide-react';
 import UpdateTimeline from '@/components/UpdateTimeline';
+import ProjectCycleBadge from '@/components/ProjectCycleBadge';
 
 const API_URL = '/api';
 
@@ -26,6 +27,7 @@ interface Project {
   status: string;
   tags: string[];
   created_at: string;
+  end_date?: string | null;
 }
 
 export default function PortalDashboardPage() {
@@ -257,7 +259,9 @@ export default function PortalDashboardPage() {
                     <CardTitle className="text-base line-clamp-1">{project.title}</CardTitle>
                     <StatusBadge status={project.status} />
                   </div>
-                  <CardDescription>{project.department}</CardDescription>
+                  {/* 项目周期胶囊 Badge */}
+                  <ProjectCycleBadge createdAt={project.created_at} endDate={project.end_date} compact />
+                  <CardDescription className="mt-2 text-xs">{project.department}</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <div className="flex items-center justify-between text-sm">

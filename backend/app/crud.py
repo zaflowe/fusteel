@@ -1,14 +1,18 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, timedelta
 from . import models, schemas
 
 def get_project_by_title(db: Session, title: str):
     return db.query(models.Project).filter(models.Project.title == title).first()
 
 def create_project(db: Session, project: schemas.ProjectCreate):
-    db_project = models.Project(**project.model_dump())
+    project_data = project.model_dump()
+    # 如果未提供 end_date，自动设置为创建时间 + 90天（约3个月）
+    if not project_data.get('end_date'):
+        project_data['end_date'] = datetime.utcnow() + timedelta(days=90)
+    db_project = models.Project(**project_data)
     db.add(db_project)
     db.commit()
     db.refresh(db_project)
@@ -280,3 +284,27 @@ def get_project_updates(db: Session, project_id: UUID) -> List[models.ProjectUpd
 def get_project_update(db: Session, update_id: UUID) -> Optional[models.ProjectUpdate]:
     """获取单个固化记录"""
     return db.query(models.ProjectUpdate).filter(models.ProjectUpdate.id == update_id).first()
+
+
+# ---- 项目周期延期历史 CRUD ----
+
+def create_delay_history(db: Session, project_id: UUID, old_end_date: datetime, 
+                         new_end_date: datetime, reason: str, changed_by: str = "系统") -> models.ProjectDelayHistory:
+    """创建延期历史记录"""
+    db_history = models.ProjectDelayHistory(
+        project_id=project_id,
+        old_end_date=old_end_date,
+        new_end_date=new_end_date,
+        reason=reason,
+        changed_by=changed_by
+    )
+    db.add(db_history)
+    db.commit()
+    db.refresh(db_history)
+    return db_history
+
+def get_delay_history(db: Session, project_id: UUID) -> List[models.ProjectDelayHistory]:
+    """获取项目的延期历史，按时间倒序"""
+    return db.query(models.ProjectDelayHistory).filter(
+        models.ProjectDelayHistory.project_id == project_id
+    ).order_by(models.ProjectDelayHistory.created_at.desc()).all()

@@ -43,11 +43,14 @@ class MilestoneResponse(MilestoneBase):
 
 class ProjectBase(BaseModel):
     title: str
+    project_code: Optional[str] = None  # 项目编号，如 JGCX-2026-014
     department: Optional[str] = None
     leader: Optional[str] = None
     participants: List[str] = []
     tags: List[str] = []
     status: ProjectStatus = ProjectStatus.in_progress
+    end_date: Optional[datetime] = None  # 结项时间
+    delay_reason: Optional[str] = None  # 延期原因
 
 class ProjectCreate(ProjectBase):
     pass
@@ -59,12 +62,15 @@ class ProjectUpdate(BaseModel):
     participants: Optional[List[str]] = None
     tags: Optional[List[str]] = None
     status: Optional[ProjectStatus] = None
+    end_date: Optional[datetime] = None   # 结项时间
+    delay_reason: Optional[str] = None    # 延期原因（修改end_date时必填）
 
 class ProjectResponse(ProjectBase):
     id: UUID
     created_at: datetime
     files: List[ProjectFileResponse] = []
     milestones: List[MilestoneResponse] = []
+    delay_history: List['ProjectDelayHistoryResponse'] = []
 
     class Config:
         from_attributes = True
@@ -143,6 +149,26 @@ class ProjectUpdateResponse(BaseModel):
     reporter_name: str
     content: str
     image_urls: List[str]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ---- 项目周期延期历史 Schema ----
+
+class ProjectDelayHistoryCreate(BaseModel):
+    new_end_date: datetime
+    reason: str
+    changed_by: Optional[str] = "系统"
+
+class ProjectDelayHistoryResponse(BaseModel):
+    id: UUID
+    project_id: UUID
+    old_end_date: Optional[datetime]
+    new_end_date: datetime
+    reason: str
+    changed_by: str
     created_at: datetime
 
     class Config:

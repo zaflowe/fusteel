@@ -122,6 +122,9 @@ async def import_projects(file: UploadFile = File(...), db: Session = Depends(ge
             if not row:
                 continue
             
+            # 获取项目编号（D列）
+            project_code = str(row[col_project_no]).strip() if col_project_no < len(row) and row[col_project_no] and str(row[col_project_no]).strip() not in ['None', ''] else None
+            
             # 获取项目名称（关键字段）
             title = str(row[col_title]).strip() if row[col_title] and str(row[col_title]).strip() not in ['None', ''] else None
             if not title:
@@ -160,6 +163,7 @@ async def import_projects(file: UploadFile = File(...), db: Session = Depends(ge
             # 创建项目
             project_data = schemas.ProjectCreate(
                 title=title,
+                project_code=project_code,
                 department=department,
                 leader=leader,
                 participants=participants,
@@ -197,10 +201,41 @@ def read_project(id: uuid.UUID, db: Session = Depends(get_db)):
 
 @app.put("/api/projects/{id}", response_model=schemas.ProjectResponse)
 def update_project(id: uuid.UUID, updates: schemas.ProjectUpdate, db: Session = Depends(get_db)):
+    # 获取原项目信息
+    db_project = crud.get_project(db, id)
+    if not db_project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # 检查是否修改了 end_date
+    old_end_date = db_project.end_date
+    new_end_date = updates.end_date if hasattr(updates, 'end_date') and updates.end_date is not None else None
+    
+    # 如果修改了 end_date 且不为空，检查是否提供了 delay_reason
+    if new_end_date is not None and old_end_date != new_end_date:
+        if not updates.delay_reason or updates.delay_reason.strip() == "":
+            raise HTTPException(status_code=400, detail="修改结项时间必须提供延期原因")
+        
+        # 创建延期历史记录
+        crud.create_delay_history(
+            db, 
+            project_id=id,
+            old_end_date=old_end_date,
+            new_end_date=new_end_date,
+            reason=updates.delay_reason,
+            changed_by="系统"  # 可以从请求中获取当前用户
+        )
+    
     project = crud.update_project(db, id, updates)
+    return project
+
+
+@app.get("/api/projects/{id}/delay-history", response_model=List[schemas.ProjectDelayHistoryResponse])
+def get_project_delay_history(id: uuid.UUID, db: Session = Depends(get_db)):
+    """获取项目延期历史"""
+    project = crud.get_project(db, id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    return project
+    return crud.get_delay_history(db, id)
 
 @app.put("/api/projects/{id}/complete", response_model=schemas.ProjectResponse)
 def complete_project(id: uuid.UUID, db: Session = Depends(get_db)):

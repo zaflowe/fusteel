@@ -11,6 +11,7 @@ import { format } from 'date-fns';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import ProjectCycleBadge from '@/components/ProjectCycleBadge';
 
 export default function DashboardPage() {
   const { projects, loading, keyword, setKeyword, fetchProjects, completeProject, uploadExcel, exportExcel, exportAllFilesZip } = useProjectStore();
@@ -236,6 +237,8 @@ function ProjectCard({ project, isFocus = false, isPending = false, isCompleted 
          <CardTitle className="text-base line-clamp-2 leading-tight group-hover:text-primary transition-colors">
             {project.title}
          </CardTitle>
+         {/* 项目周期胶囊 Badge */}
+         <ProjectCycleBadge createdAt={project.created_at} endDate={project.end_date} compact />
          <CardDescription className="flex flex-col gap-1 mt-2 text-xs">
             {project.department && <span className="font-medium text-foreground/80">{project.department}</span>}
             {project.leader && (

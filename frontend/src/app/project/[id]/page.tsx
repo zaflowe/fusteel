@@ -13,13 +13,25 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { 
   UploadCloud, FileText, CheckCircle2, ArrowLeft, Plus, X, 
   User, Users, Calendar, Trash2, Download, File, FileSpreadsheet, 
-  Presentation, Loader2, Archive, Tag, Camera
+  Presentation, Loader2, Archive, Tag, Camera, Edit3, Clock,
+  AlertCircle, History
 } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 import axios from 'axios';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import UpdateForm from '@/components/UpdateForm';
 import UpdateTimeline from '@/components/UpdateTimeline';
+import ProjectCycleBadge from '@/components/ProjectCycleBadge';
+import FilePoolSection from '@/components/FilePoolSection';
 
 const API_URL = '/api';
 
@@ -46,14 +58,27 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const [files, setFiles] = useState<ProjectFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState<FileType | null>(null);
-  const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
-  const [downloading, setDownloading] = useState(false);
   const [newTag, setNewTag] = useState('');
   const [managingTags, setManagingTags] = useState(false);
   const [updates, setUpdates] = useState<any[]>([]);
   const [updatesLoading, setUpdatesLoading] = useState(false);
+  const [delayHistory, setDelayHistory] = useState<any[]>([]);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [newEndDate, setNewEndDate] = useState('');
+  const [delayReason, setDelayReason] = useState('');
+  const [updating, setUpdating] = useState(false);
   
   const { addTag, removeTag } = useProjectStore();
+
+  // 获取延期历史
+  const fetchDelayHistory = async () => {
+    try {
+      const res = await axios.get(`${API_URL}/projects/${id}/delay-history`);
+      setDelayHistory(res.data);
+    } catch (error) {
+      console.error("获取延期历史失败", error);
+    }
+  };
 
   // 获取固化记录
   const fetchUpdates = async () => {
@@ -93,7 +118,34 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   useEffect(() => {
     fetchDetails();
     fetchUpdates();
+    fetchDelayHistory();
   }, [id]);
+
+  // 处理保存周期修改
+  const handleSaveCycle = async () => {
+    if (!newEndDate || !delayReason.trim()) {
+      toast.error('请填写结项时间和延期原因');
+      return;
+    }
+    
+    setUpdating(true);
+    try {
+      await axios.put(`${API_URL}/projects/${id}`, {
+        end_date: newEndDate,
+        delay_reason: delayReason
+      });
+      toast.success('项目周期更新成功');
+      setShowEditModal(false);
+      setNewEndDate('');
+      setDelayReason('');
+      await fetchDetails();
+      await fetchDelayHistory();
+    } catch (error: any) {
+      toast.error(error.response?.data?.detail || '更新失败');
+    } finally {
+      setUpdating(false);
+    }
+  };
 
   // 按类型分组文件
   const filesByType = {
@@ -132,85 +184,24 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
     }
   };
 
-  // 处理文件选择
-  const toggleFileSelection = (fileId: string) => {
-    const newSelected = new Set(selectedFiles);
-    if (newSelected.has(fileId)) {
-      newSelected.delete(fileId);
-    } else {
-      newSelected.add(fileId);
-    }
-    setSelectedFiles(newSelected);
-  };
-
-  // 全选/取消全选某类型文件
-  const toggleSelectAll = (typeFiles: ProjectFile[]) => {
-    const typeFileIds = typeFiles.map(f => f.id);
-    const allSelected = typeFileIds.every(id => selectedFiles.has(id));
-    
-    const newSelected = new Set(selectedFiles);
-    if (allSelected) {
-      // 取消全选
-      typeFileIds.forEach(id => newSelected.delete(id));
-    } else {
-      // 全选
-      typeFileIds.forEach(id => newSelected.add(id));
-    }
-    setSelectedFiles(newSelected);
-  };
-
-  // 下载选中文件
-  const handleDownloadSelected = async () => {
-    if (selectedFiles.size === 0) {
-      toast.error('请先选择要下载的文件');
-      return;
-    }
-
-    setDownloading(true);
+  // 处理文件下载
+  const handleDownloadSingle = async (fileId: string, originalName: string) => {
     try {
-      const selectedIds = Array.from(selectedFiles);
-      
-      if (selectedIds.length === 1) {
-        // 单文件直接下载
-        const fileId = selectedIds[0];
-        const response = await axios.get(`${API_URL}/files/${fileId}/download`, {
-          responseType: 'blob'
-        });
-        
-        const file = files.find(f => f.id === fileId);
-        const blob = new Blob([response.data]);
-        const url = window.URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = file?.original_name || '下载文件';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        window.URL.revokeObjectURL(url);
-        
-        toast.success('✅ 文件下载成功');
-      } else {
-        // 多文件打包下载
-        const response = await axios.post(`${API_URL}/files/download/batch`, selectedIds, {
-          responseType: 'blob'
-        });
-        
-        const blob = new Blob([response.data], { type: 'application/zip' });
-        const url = window.URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `下载文件.zip`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        window.URL.revokeObjectURL(url);
-        
-        toast.success('✅ 批量下载成功');
-      }
+      const response = await axios.get(`${API_URL}/files/${fileId}/download`, {
+        responseType: 'blob'
+      });
+      const blob = new Blob([response.data]);
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = originalName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      toast.success('✅ 文件下载成功');
     } catch (error) {
-      toast.error('❌ 下载失败：未找到文件');
-    } finally {
-      setDownloading(false);
+      toast.error('❌ 下载失败');
     }
   };
 
@@ -219,10 +210,6 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
     try {
       await axios.delete(`${API_URL}/files/${fileId}`);
       toast.success('删除成功');
-      // 从选中列表中移除
-      const newSelected = new Set(selectedFiles);
-      newSelected.delete(fileId);
-      setSelectedFiles(newSelected);
       await fetchDetails();
     } catch (error) {
       toast.error('删除失败');
@@ -251,8 +238,23 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
       {/* 项目基本信息 */}
       <div className="bg-card p-6 rounded-xl border shadow-sm">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          <div>
-            <h1 className="text-3xl font-bold">{project.title}</h1>
+          <div className="flex-1">
+            <div className="flex items-center gap-3 flex-wrap">
+              <h1 className="text-3xl font-bold">{project.title}</h1>
+              {/* 周期状态标签 - 显示在项目名称右侧 */}
+              {project.end_date && (
+                <div 
+                  className="cursor-pointer hover:opacity-80 transition-opacity"
+                  onClick={() => {
+                    setNewEndDate(format(new Date(project.end_date!), 'yyyy-MM-dd'));
+                    setShowEditModal(true);
+                  }}
+                  title="点击修改周期"
+                >
+                  <ProjectCycleBadge createdAt={project.created_at} endDate={project.end_date} compact />
+                </div>
+              )}
+            </div>
             <div className="flex items-center gap-3 mt-2 text-muted-foreground">
               <Badge variant="secondary">{project.department}</Badge>
               <StatusBadge status={project.status} />
@@ -265,7 +267,9 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
             <div className="h-5 w-5 flex items-center justify-center text-gray-500 font-mono text-xs font-bold">ID</div>
             <div>
               <div className="text-sm text-muted-foreground">项目编号</div>
-              <div className="font-medium font-mono text-xs">{project.id}</div>
+              <div className="font-medium font-mono text-xs">
+                {project.project_code || '未设置'}
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -286,6 +290,38 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
               </div>
             </div>
           </div>
+        </div>
+
+        {/* 项目周期编辑区域 */}
+        <div className="mt-4 p-3 bg-secondary/30 rounded-lg flex items-center gap-2 flex-wrap">
+          <Clock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+          <span className="text-sm text-muted-foreground">项目周期：</span>
+          {project.end_date ? (
+            <>
+              <span className="text-sm font-medium">
+                {format(new Date(project.created_at), 'yyyy/MM/dd')} 至 {format(new Date(project.end_date), 'yyyy/MM/dd')}
+              </span>
+              {project.delay_reason && (
+                <span className="text-orange-600 text-xs" title={project.delay_reason}>
+                  （延期：{project.delay_reason.length > 20 ? project.delay_reason.slice(0, 20) + '…' : project.delay_reason}）
+                </span>
+              )}
+            </>
+          ) : (
+            <span className="text-sm text-muted-foreground">未设置结项时间</span>
+          )}
+          {/* 细微内联编辑图标 */}
+          <button
+            className="ml-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors cursor-pointer rounded px-1.5 py-0.5 hover:bg-primary/10"
+            onClick={() => {
+              setNewEndDate(project.end_date ? format(new Date(project.end_date), 'yyyy-MM-dd') : '');
+              setShowEditModal(true);
+            }}
+            title="修改项目周期"
+          >
+            <Edit3 className="h-3 w-3" />
+            <span>编辑</span>
+          </button>
         </div>
 
         {/* 标签管理区域 */}
@@ -369,106 +405,19 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 
       {/* 资料池区块 */}
       <section className="space-y-4">
-        <div className="flex justify-between items-center">
+        <div className="flex justify-between items-center mb-4">
           <h2 className="text-2xl font-bold flex items-center gap-2">
             <Archive className="h-6 w-6 text-primary" /> 
             项目资料池
           </h2>
-          
-          {/* 下载选中按钮 */}
-          {selectedFiles.size > 0 && (
-            <Button 
-              onClick={handleDownloadSelected} 
-              disabled={downloading}
-              className="gap-2"
-            >
-              {downloading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Download className="h-4 w-4" />
-              )}
-              下载选中文件 ({selectedFiles.size})
-            </Button>
-          )}
         </div>
-
-        <Tabs defaultValue="application" className="w-full">
-          <TabsList className="grid w-full grid-cols-3">
-            <TabsTrigger value="application" className="gap-2">
-              <FileText className="h-4 w-4" />
-              立项申请表
-              {filesByType.application.length > 0 && (
-                <Badge variant="secondary" className="ml-1">{filesByType.application.length}</Badge>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="ppt" className="gap-2">
-              <Presentation className="h-4 w-4" />
-              结项 PPT
-              {filesByType.ppt.length > 0 && (
-                <Badge variant="secondary" className="ml-1">{filesByType.ppt.length}</Badge>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="free_resource" className="gap-2">
-              <FileSpreadsheet className="h-4 w-4" />
-              自由资料池
-              {filesByType.free_resource.length > 0 && (
-                <Badge variant="secondary" className="ml-1">{filesByType.free_resource.length}</Badge>
-              )}
-            </TabsTrigger>
-          </TabsList>
-
-          {/* 立项申请表 */}
-          <TabsContent value="application">
-            <FileTypeSection
-              title="立项申请表"
-              description="上传项目的立项申请表（PDF格式），每个项目只能有一份"
-              fileType="application"
-              files={filesByType.application}
-              accept=".pdf"
-              uploading={uploading === 'application'}
-              selectedFiles={selectedFiles}
-              onToggleSelect={toggleFileSelection}
-              onUpload={handleUpload}
-              onDelete={handleDelete}
-              formatFileSize={formatFileSize}
-            />
-          </TabsContent>
-
-          {/* 结项PPT */}
-          <TabsContent value="ppt">
-            <FileTypeSection
-              title="结项 PPT"
-              description="上传结项汇报PPT（PPT/PPTX格式），上传后将自动更新项目状态为待结项"
-              fileType="ppt"
-              files={filesByType.ppt}
-              accept=".ppt,.pptx"
-              uploading={uploading === 'ppt'}
-              selectedFiles={selectedFiles}
-              onToggleSelect={toggleFileSelection}
-              onUpload={handleUpload}
-              onDelete={handleDelete}
-              formatFileSize={formatFileSize}
-            />
-          </TabsContent>
-
-          {/* 自由资料池 */}
-          <TabsContent value="free_resource">
-            <FileTypeSection
-              title="自由资料池"
-              description="上传任意类型的辅助资料（照片、文档、表格等），可上传多份"
-              fileType="free_resource"
-              files={filesByType.free_resource}
-              accept="*/*"
-              uploading={uploading === 'free_resource'}
-              selectedFiles={selectedFiles}
-              onToggleSelect={toggleFileSelection}
-              onUpload={handleUpload}
-              onDelete={handleDelete}
-              formatFileSize={formatFileSize}
-              allowMultiple={true}
-            />
-          </TabsContent>
-        </Tabs>
+        <FilePoolSection 
+          files={files} 
+          uploadingType={uploading} 
+          onUpload={handleUpload} 
+          onDownload={handleDownloadSingle} 
+          onDelete={handleDelete} 
+        />
       </section>
 
       {/* 项目固化记录区块 */}
@@ -490,9 +439,53 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
             />
           </div>
 
-          {/* 右侧：时间轴展示 */}
+          {/* 右侧：历史记录（包含固化记录和周期变更） */}
           <div className="space-y-4">
             <h3 className="text-lg font-semibold text-muted-foreground">历史记录</h3>
+            
+            {/* 周期变更历史 */}
+            {delayHistory.length > 0 && (
+              <div className="mb-4">
+                <h4 className="text-sm font-medium text-muted-foreground mb-2 flex items-center gap-2">
+                  <History className="h-4 w-4" />
+                  周期变更记录
+                </h4>
+                <div className="space-y-2">
+                  {delayHistory.map((record, index) => (
+                    <div 
+                      key={record.id} 
+                      className="flex items-start gap-2 p-2 bg-orange-50 rounded-lg border border-orange-100"
+                    >
+                      <div className="flex-shrink-0 w-5 h-5 rounded-full bg-orange-100 flex items-center justify-center text-xs font-medium text-orange-600">
+                        {delayHistory.length - index}
+                      </div>
+                      <div className="flex-1 text-xs">
+                        <div>
+                          <span className="text-muted-foreground">原定</span>
+                          <span className="font-medium mx-1">
+                            {record.old_end_date 
+                              ? format(new Date(record.old_end_date), 'yyyy/MM/dd') 
+                              : '未设置'}
+                          </span>
+                          <span className="text-muted-foreground">→</span>
+                          <span className="font-medium mx-1 text-primary">
+                            {format(new Date(record.new_end_date), 'yyyy/MM/dd')}
+                          </span>
+                        </div>
+                        <div className="text-orange-600 mt-0.5">
+                          原因：{record.reason}
+                        </div>
+                        <div className="text-muted-foreground text-[10px] mt-0.5">
+                          {format(new Date(record.created_at), 'yyyy-MM-dd HH:mm')} · {record.changed_by}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            
+            {/* 固化记录时间轴 */}
             {updatesLoading ? (
               <div className="text-center py-8 text-muted-foreground">
                 <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2" />
@@ -504,153 +497,79 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           </div>
         </div>
       </section>
-    </div>
-  );
-}
 
-// 文件类型区块组件
-interface FileTypeSectionProps {
-  title: string;
-  description: string;
-  fileType: FileType;
-  files: ProjectFile[];
-  accept: string;
-  uploading: boolean;
-  selectedFiles: Set<string>;
-  onToggleSelect: (fileId: string) => void;
-  onUpload: (fileType: FileType, file: File) => void;
-  onDelete: (fileId: string) => void;
-  formatFileSize: (bytes: number) => string;
-  allowMultiple?: boolean;
-}
-
-function FileTypeSection({
-  title,
-  description,
-  fileType,
-  files,
-  accept,
-  uploading,
-  selectedFiles,
-  onToggleSelect,
-  onUpload,
-  onDelete,
-  formatFileSize,
-  allowMultiple = false
-}: FileTypeSectionProps) {
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      onUpload(fileType, file);
-    }
-    // 清空input，允许重复上传相同文件
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-  };
-
-  // 全选当前类型的文件
-  const handleSelectAll = () => {
-    files.forEach(f => {
-      if (!selectedFiles.has(f.id)) {
-        onToggleSelect(f.id);
-      }
-    });
-  };
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-lg">{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {/* 上传区域 */}
-        <div 
-          className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${
-            uploading ? 'bg-primary/5 border-primary' : 'border-border hover:border-primary/50 hover:bg-secondary/50'
-          }`}
-          onClick={() => !uploading && fileInputRef.current?.click()}
-        >
-          <input
-            type="file"
-            ref={fileInputRef}
-            accept={accept}
-            className="hidden"
-            onChange={handleFileChange}
-          />
+      {/* 修改周期 Modal */}
+      <Dialog open={showEditModal} onOpenChange={setShowEditModal}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Clock className="h-5 w-5" />
+              修改项目周期
+            </DialogTitle>
+            <DialogDescription>
+              调整项目结项时间，系统将自动记录变更历史
+            </DialogDescription>
+          </DialogHeader>
           
-          {uploading ? (
-            <div className="flex flex-col items-center gap-2">
-              <Loader2 className="h-8 w-8 animate-spin text-primary" />
-              <span className="text-sm text-muted-foreground">正在上传...</span>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center gap-2">
-              <UploadCloud className="h-8 w-8 text-muted-foreground" />
-              <span className="text-sm font-medium">点击上传文件</span>
-              <span className="text-xs text-muted-foreground">
-                支持格式: {accept === '*/*' ? '任意文件' : accept}
-              </span>
-            </div>
-          )}
-        </div>
-
-        {/* 文件列表 */}
-        {files.length > 0 ? (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between px-2">
-              <span className="text-sm text-muted-foreground">共 {files.length} 个文件</span>
-              {files.length > 1 && (
-                <Button variant="ghost" size="sm" onClick={handleSelectAll}>
-                  全选
-                </Button>
-              )}
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="endDate">
+                新的结项时间 <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="endDate"
+                type="date"
+                value={newEndDate}
+                onChange={(e) => setNewEndDate(e.target.value)}
+                min={format(new Date(), 'yyyy-MM-dd')}
+              />
             </div>
             
-            {files.map((file) => (
-              <div 
-                key={file.id} 
-                className="flex items-center gap-3 p-3 border rounded-lg hover:bg-secondary/30 transition-colors"
-              >
-                <Checkbox 
-                  checked={selectedFiles.has(file.id)}
-                  onCheckedChange={() => onToggleSelect(file.id)}
-                />
-                
-                <File className="h-5 w-5 text-muted-foreground flex-shrink-0" />
-                
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium truncate">{file.original_name}</div>
-                  <div className="text-xs text-muted-foreground flex gap-2">
-                    <span>{formatFileSize(file.file_size)}</span>
-                    <span>•</span>
-                    <span>{format(new Date(file.uploaded_at), 'yyyy-MM-dd HH:mm')}</span>
-                    <span>•</span>
-                    <span>{file.uploaded_by}</span>
-                  </div>
-                </div>
-                
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 text-destructive hover:text-destructive"
-                  onClick={() => onDelete(file.id)}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </div>
-            ))}
+            <div className="space-y-2">
+              <Label htmlFor="delayReason">
+                变更原因 <span className="text-destructive">*</span>
+              </Label>
+              <Textarea
+                id="delayReason"
+                placeholder="请详细说明延期原因（必填）"
+                value={delayReason}
+                onChange={(e) => setDelayReason(e.target.value)}
+                rows={3}
+              />
+              <p className="text-xs text-muted-foreground">
+                修改周期必须填写原因，以便追溯变更记录
+              </p>
+            </div>
           </div>
-        ) : (
-          <div className="text-center py-8 text-muted-foreground">
-            暂无文件，请点击上方上传
-          </div>
-        )}
-      </CardContent>
-    </Card>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowEditModal(false);
+                setNewEndDate('');
+                setDelayReason('');
+              }}
+            >
+              取消
+            </Button>
+            <Button
+              onClick={handleSaveCycle}
+              disabled={updating || !newEndDate || !delayReason.trim()}
+            >
+              {updating ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  保存中...
+                </>
+              ) : (
+                '保存修改'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }
 
