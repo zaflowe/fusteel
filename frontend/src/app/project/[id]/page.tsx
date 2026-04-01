@@ -67,8 +67,28 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const [newEndDate, setNewEndDate] = useState('');
   const [delayReason, setDelayReason] = useState('');
   const [updating, setUpdating] = useState(false);
+  const [editingField, setEditingField] = useState<'leader' | 'participants' | null>(null);
+  const [editValue, setEditValue] = useState('');
   
-  const { addTag, removeTag } = useProjectStore();
+  const { addTag, removeTag, updateProject } = useProjectStore();
+
+  const handleInlineSave = async () => {
+    if (!editingField) return;
+    try {
+      if (editingField === 'leader') {
+        await updateProject(id, { leader: editValue.trim() });
+      } else if (editingField === 'participants') {
+        const parts = editValue.split(/[,，、\s]+/).filter(Boolean);
+        await updateProject(id, { participants: parts });
+      }
+      toast.success('人员信息更新成功');
+      await fetchDetails();
+    } catch (error) {
+      toast.error('更新失败');
+    } finally {
+      setEditingField(null);
+    }
+  };
 
   // 获取延期历史
   const fetchDelayHistory = async () => {
@@ -255,9 +275,32 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
                 </div>
               )}
             </div>
-            <div className="flex items-center gap-3 mt-2 text-muted-foreground">
+            <div className="flex items-center gap-3 mt-2 text-muted-foreground flex-wrap">
               <Badge variant="secondary">{project.department}</Badge>
               <StatusBadge status={project.status} />
+              
+              <div className="flex gap-2 ml-2">
+                {project.status !== '暂停中' ? (
+                  <Button variant="outline" size="sm" className="h-6 px-2 text-xs border-red-200 text-red-600 hover:bg-red-50" onClick={async () => {
+                    await addTag(project.id, '#暂停');
+                    toast.success('项目已暂停');
+                    fetchDetails();
+                  }}>强制暂停</Button>
+                ) : (
+                  <Button variant="outline" size="sm" className="h-6 px-2 text-xs border-blue-200 text-blue-600 hover:bg-blue-50" onClick={async () => {
+                    await addTag(project.id, '#实施中');
+                    toast.success('项目恢复实施');
+                    fetchDetails();
+                  }}>恢复实施</Button>
+                )}
+                {project.status !== '已结项' && project.status !== '已完成' && (
+                  <Button variant="outline" size="sm" className="h-6 px-2 text-xs border-amber-200 text-amber-600 hover:bg-amber-50" onClick={async () => {
+                    await addTag(project.id, '#已完成');
+                    toast.success('项目已标记为完成，等待后续归档');
+                    fetchDetails();
+                  }}>标记为已完成</Button>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -272,22 +315,46 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            <User className="h-5 w-5 text-blue-500" />
-            <div>
-              <div className="text-sm text-muted-foreground">项目负责人</div>
-              <div className="font-medium">{project.leader || '未指定'}</div>
+          <div className="flex items-center gap-3 group">
+            <User className="h-5 w-5 text-blue-500 flex-shrink-0" />
+            <div className="flex-1">
+              <div className="text-sm text-muted-foreground flex items-center justify-between">
+                项目负责人
+                {editingField !== 'leader' && (
+                  <Edit3 className="h-3 w-3 opacity-0 group-hover:opacity-100 cursor-pointer hover:text-primary transition-opacity" 
+                    onClick={() => { setEditingField('leader'); setEditValue(project.leader || ''); }} 
+                  />
+                )}
+              </div>
+              {editingField === 'leader' ? (
+                <div className="flex items-center gap-1 mt-1">
+                  <Input autoFocus size={10} className="h-7 text-xs px-2" value={editValue} onChange={e => setEditValue(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleInlineSave()} onBlur={handleInlineSave} />
+                </div>
+              ) : (
+                <div className="font-medium">{project.leader || '未指定'}</div>
+              )}
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            <Users className="h-5 w-5 text-purple-500" />
-            <div>
-              <div className="text-sm text-muted-foreground">项目参与人员</div>
-              <div className="font-medium">
-                {project.participants?.length > 0 
-                  ? project.participants.join('、') 
-                  : '暂无参与人员'}
+          <div className="flex items-center gap-3 group">
+            <Users className="h-5 w-5 text-purple-500 flex-shrink-0" />
+            <div className="flex-1">
+              <div className="text-sm text-muted-foreground flex items-center justify-between">
+                项目参与人员
+                {editingField !== 'participants' && (
+                  <Edit3 className="h-3 w-3 opacity-0 group-hover:opacity-100 cursor-pointer hover:text-primary transition-opacity" 
+                    onClick={() => { setEditingField('participants'); setEditValue((project.participants || []).join(', ')); }} 
+                  />
+                )}
               </div>
+              {editingField === 'participants' ? (
+                <div className="flex items-center gap-1 mt-1">
+                  <Input autoFocus className="h-7 text-xs px-2" value={editValue} onChange={e => setEditValue(e.target.value)} placeholder="逗号或空格分隔" onKeyDown={e => e.key === 'Enter' && handleInlineSave()} onBlur={handleInlineSave} />
+                </div>
+              ) : (
+                <div className="font-medium line-clamp-2" title={project.participants?.join('、')}>
+                  {project.participants?.length > 0 ? project.participants.join('、') : '暂无参与人员'}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -579,13 +646,17 @@ function StatusBadge({ status }: { status: string }) {
       class: 'bg-blue-500 text-white',
       label: '实施中'
     },
-    '待结项': {
-      class: 'bg-amber-500 text-white',
-      label: '待结项'
-    },
     '已完成': {
-      class: 'bg-emerald-500 text-white',
+      class: 'bg-amber-500 text-white',
       label: '已完成'
+    },
+    '已结项': {
+      class: 'bg-emerald-500 text-white',
+      label: '已结项'
+    },
+    '暂停中': {
+      class: 'bg-red-500 text-white',
+      label: '暂停中'
     }
   };
   

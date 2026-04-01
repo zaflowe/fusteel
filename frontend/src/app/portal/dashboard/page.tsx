@@ -110,8 +110,9 @@ export default function PortalDashboardPage() {
   const StatusBadge = ({ status }: { status: string }) => {
     const config: Record<string, { class: string; label: string }> = {
       '实施中': { class: 'bg-blue-500 text-white', label: '实施中' },
-      '待结项': { class: 'bg-amber-500 text-white', label: '待结项' },
-      '已完成': { class: 'bg-emerald-500 text-white', label: '已完成' }
+      '已完成': { class: 'bg-amber-500 text-white', label: '已完成' },
+      '已结项': { class: 'bg-emerald-500 text-white', label: '已结项' },
+      '暂停中': { class: 'bg-red-500 text-white', label: '暂停中' }
     };
     const { class: bgClass, label } = config[status] || config['实施中'];
     return <Badge className={`${bgClass}`}>{label}</Badge>;

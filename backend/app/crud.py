@@ -4,6 +4,45 @@ from uuid import UUID
 from datetime import datetime, timedelta
 from . import models, schemas
 
+def sync_status_from_tags(project: models.Project):
+    """根据最新标签列表，自动同步状态并移除冲突标签"""
+    if project.tags is None:
+        return
+        
+    tags = list(project.tags)
+    
+    # "已完成"是已经完成但是没有结项(待结项状态), 已结项是就是归档了(已完成状态)
+    has_closed = "#已结项" in tags
+    has_paused = "#暂停" in tags or "#暂停中" in tags
+    # 只要有待结项或者已完成，都视为待结项状态
+    has_pending_closure = "#待结项" in tags or "#已完成" in tags
+    has_progress = "#实施中" in tags
+    
+    # 状态决定及冲突清理
+    target_status = models.ProjectStatus.in_progress
+    target_tag = "#实施中"
+    
+    if has_closed:
+        target_status = models.ProjectStatus.completed
+        target_tag = "#已结项"
+    elif has_paused:
+        target_status = models.ProjectStatus.paused
+        target_tag = "#暂停中"
+    elif has_pending_closure:
+        target_status = models.ProjectStatus.pending_completion
+        # 偏好使用 #已完成 这个词（根据用户的反馈，已完成其实代表待结项）
+        target_tag = "#已完成"
+        
+    # 移除所有状态标签，然后加上最终的 target_tag
+    status_tags_pool = ["#已结项", "#已完成", "#暂停", "#暂停中", "#待结项", "#实施中"]
+    cleaned_tags = [t for t in tags if t not in status_tags_pool]
+    
+    if target_tag not in cleaned_tags:
+        cleaned_tags.append(target_tag)
+        
+    project.tags = cleaned_tags
+    project.status = target_status
+
 def get_project_by_title(db: Session, title: str):
     return db.query(models.Project).filter(models.Project.title == title).first()
 
@@ -13,6 +52,7 @@ def create_project(db: Session, project: schemas.ProjectCreate):
     if not project_data.get('end_date'):
         project_data['end_date'] = datetime.utcnow() + timedelta(days=90)
     db_project = models.Project(**project_data)
+    sync_status_from_tags(db_project)
     db.add(db_project)
     db.commit()
     db.refresh(db_project)
@@ -24,6 +64,10 @@ def update_project(db: Session, project_id: UUID, updates: schemas.ProjectUpdate
         return None
     for field, value in updates.model_dump(exclude_none=True).items():
         setattr(db_project, field, value)
+        
+    if "tags" in updates.model_dump(exclude_none=True):
+        sync_status_from_tags(db_project)
+        
     db.commit()
     db.refresh(db_project)
     return db_project
@@ -67,12 +111,11 @@ def complete_project(db: Session, project_id: UUID):
     db_project = db.query(models.Project).filter(models.Project.id == project_id).first()
     if db_project:
         db_project.status = models.ProjectStatus.completed
-        # Remove 待结项 tag if present, add 已完成 tag
+        # 强制添加 #已结项 标签
         tags = list(db_project.tags or [])
-        tags = [t for t in tags if t not in ["#待结项", "#实施中"]]
-        if "#已完成" not in tags:
-            tags.append("#已完成")
+        tags.append("#已结项")
         db_project.tags = tags
+        sync_status_from_tags(db_project)
         db.commit()
         db.refresh(db_project)
     return db_project

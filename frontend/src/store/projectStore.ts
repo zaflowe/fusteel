@@ -3,7 +3,7 @@ import axios from 'axios';
 
 const API_URL = '/api';
 
-export type ProjectStatus = '实施中' | '待结项' | '已完成';
+export type ProjectStatus = '实施中' | '已完成' | '已结项' | '暂停中';
 
 export interface ProjectFile {
   id: string;
@@ -67,6 +67,7 @@ interface ProjectStore {
   exportProjectFilesZip: (projectId: string) => Promise<void>;
   addTag: (id: string, tag: string) => Promise<void>;
   removeTag: (id: string, tag: string) => Promise<void>;
+  updateProject: (id: string, updates: Partial<Project>) => Promise<void>;
 }
 
 export const useProjectStore = create<ProjectStore>((set, get) => ({
@@ -224,6 +225,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       await get().fetchProjects();
     } catch (error: any) {
       console.error("Failed to remove tag", error);
+      throw error;
+    }
+  },
+
+  // 更新项目部分字段
+  updateProject: async (id: string, updates: Partial<Project>) => {
+    try {
+      await axios.put(`${API_URL}/projects/${id}`, updates);
+      await get().fetchProjects();
+    } catch (error) {
+      console.error("Failed to update project", error);
       throw error;
     }
   }

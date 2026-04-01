@@ -266,6 +266,7 @@ def add_project_tag(id: uuid.UUID, payload: dict, db: Session = Depends(get_db))
     
     current_tags.append(tag)
     project.tags = current_tags
+    crud.sync_status_from_tags(project)
     db.commit()
     db.refresh(project)
     return project
@@ -287,6 +288,7 @@ def remove_project_tag(id: uuid.UUID, tag: str, db: Session = Depends(get_db)):
     
     current_tags.remove(tag)
     project.tags = current_tags
+    crud.sync_status_from_tags(project)
     db.commit()
     db.refresh(project)
     return project
@@ -356,11 +358,10 @@ async def upload_project_file(
     # 如果是结项PPT，自动更新项目状态
     if ft == models.FileType.ppt:
         tags = list(project.tags or [])
-        tags = [t for t in tags if t not in ["#实施中"]]
-        if "#待结项" not in tags:
-            tags.append("#待结项")
+        if "#已完成" not in tags:
+            tags.append("#已完成")
         project.tags = tags
-        project.status = models.ProjectStatus.pending_completion
+        crud.sync_status_from_tags(project)
         db.commit()
 
     return db_file
@@ -752,15 +753,13 @@ def export_projects_zip(
         else:
             projects = crud.search_projects(db, keyword="", tags=[tag] if tag else [])
         
-        if not projects:
-            raise HTTPException(status_code=404, detail="未找到符合条件的项目")
-        
+        # 如果未找到项目，依然允许流转到下方，因为 files_to_zip 将为空，我们能优雅返回包含 README 的 ZIP
         # 收集所有需要打包的文件
         files_to_zip = []
         for project in projects:
             project_files = crud.get_project_files(db, project.id)
             for f in project_files:
-                file_path = UPLOAD_DIR / Path(f.file_url).name
+                file_path = UPLOAD_DIR.parent / f.storage_path
                 if file_path.exists():
                     # 安全的文件夹名称（移除非法字符）
                     safe_folder = re.sub(r'[<>:"/\\|?*]', '_', project.title)[:50]
@@ -769,9 +768,7 @@ def export_projects_zip(
                         "arcname": f"{safe_folder}/{f.file_type.value}/{f.original_name}"
                     })
         
-        if not files_to_zip:
-            raise HTTPException(status_code=404, detail="未找到可下载的文件")
-        
+        # 不再抛出404，转而由 iter_zip 优雅地向压缩包塞入提示说明文本
         # 流式生成ZIP文件
         def iter_zip():
             """
@@ -779,6 +776,9 @@ def export_projects_zip(
             """
             buffer = io.BytesIO()
             with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                if not files_to_zip:
+                    zf.writestr("说明_README.txt", "该选择范围空空如也，无任何资料可供下载（No files found for your selection）.")
+                
                 for file_info in files_to_zip:
                     # 逐个添加文件到ZIP
                     zf.write(file_info["path"], file_info["arcname"])

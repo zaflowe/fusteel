@@ -10,8 +10,9 @@ from .database import Base
 
 class ProjectStatus(str, enum.Enum):
     in_progress = "实施中"
-    pending_completion = "待结项"
-    completed = "已完成"
+    pending_completion = "已完成"  # 原待结项
+    completed = "已结项"         # 原已完成归档
+    paused = "暂停中"
 
 class FileType(str, enum.Enum):
     application = "application"  # 立项申请表

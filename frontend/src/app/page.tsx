@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Search, Calendar, Activity, CheckCircle2, ChevronRight, Database, Clock, User, FileSpreadsheet, FileArchive } from 'lucide-react';
+import { Search, Calendar, Activity, CheckCircle2, ChevronRight, Database, Clock, User, FileSpreadsheet, FileArchive, AlertCircle } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import Link from 'next/link';
@@ -59,8 +59,9 @@ export default function DashboardPage() {
 
   // Three-state split
   const inProgressProjects = projects.filter(p => p.status === '实施中');
-  const pendingProjects = projects.filter(p => p.status === '待结项');
-  const completedProjects = projects.filter(p => p.status === '已完成');
+  const pendingProjects = projects.filter(p => p.status === '已完成');
+  const completedProjects = projects.filter(p => p.status === '已结项');
+  const pausedProjects = projects.filter(p => p.status === '暂停中');
 
   return (
     <div className="container mx-auto p-6 md:p-8 space-y-10 max-w-7xl">
@@ -153,12 +154,31 @@ export default function DashboardPage() {
             )}
           </section>
 
+          {/* 暂停中项目 */}
+          {(pausedProjects.length > 0) && (
+            <section className="space-y-4 pt-2">
+              <h2 className="text-xl font-semibold flex items-center gap-2 text-red-500">
+                <AlertCircle className="h-5 w-5" />
+                暂停中 <span className="text-sm font-normal text-muted-foreground ml-1">({pausedProjects.length} 项)</span>
+              </h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 opacity-80 hover:opacity-100 transition-opacity">
+                {pausedProjects.map((project) => (
+                  <ProjectCard 
+                    key={project.id} 
+                    project={project} 
+                    isPaused
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+
           {/* 待结项项目 */}
           {(pendingProjects.length > 0 || searchInput) && (
             <section className="space-y-4 pt-2">
               <h2 className="text-xl font-semibold flex items-center gap-2 text-amber-500">
                 <Clock className="h-5 w-5" />
-                待结项 <span className="text-sm font-normal text-muted-foreground ml-1">({pendingProjects.length} 项，等待结项审批)</span>
+                已完成 <span className="text-sm font-normal text-muted-foreground ml-1">({pendingProjects.length} 项，等待结项归档)</span>
               </h2>
               {pendingProjects.length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -173,7 +193,7 @@ export default function DashboardPage() {
                 </div>
               ) : (
                 <div className="h-20 border-2 border-dashed border-amber-500/20 rounded-xl flex items-center justify-center text-muted-foreground text-sm">
-                  暂无待结项的项目
+                  暂无待归档的已完成项目
                 </div>
               )}
             </section>
@@ -184,7 +204,7 @@ export default function DashboardPage() {
             <section className="space-y-4 pt-2 border-t border-border/50">
               <h2 className="text-xl font-semibold flex items-center gap-2 text-muted-foreground">
                  <CheckCircle2 className="h-5 w-5" />
-                 已完成归档 <span className="text-sm font-normal ml-1">({completedProjects.length} 项)</span>
+                 已结项归档 <span className="text-sm font-normal ml-1">({completedProjects.length} 项)</span>
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 opacity-70 hover:opacity-100 transition-opacity">
                 {completedProjects.map((project) => (
@@ -199,31 +219,36 @@ export default function DashboardPage() {
   );
 }
 
-function ProjectCard({ project, isFocus = false, isPending = false, isCompleted = false, onComplete }: { 
+function ProjectCard({ project, isFocus = false, isPending = false, isCompleted = false, isPaused = false, onComplete }: { 
   project: Project; 
   isFocus?: boolean; 
   isPending?: boolean;
   isCompleted?: boolean; 
+  isPaused?: boolean;
   onComplete?: () => void;
 }) {
   const router = useRouter();
   
   const bannerColor = isCompleted 
     ? 'bg-emerald-500/50' 
-    : isPending 
-      ? 'bg-amber-500' 
-      : 'bg-blue-500';
+    : isPaused
+      ? 'bg-red-500/50'
+      : isPending 
+        ? 'bg-amber-500' 
+        : 'bg-blue-500';
 
   const statusBadgeClass = isCompleted
     ? 'text-emerald-500 border-emerald-500/30 bg-emerald-500/10'
-    : isPending
-      ? 'text-amber-500 border-amber-500/30 bg-amber-500/10'
-      : 'text-blue-500 border-blue-500/30 bg-blue-500/10';
+    : isPaused
+      ? 'text-red-500 border-red-500/30 bg-red-500/10'
+      : isPending
+        ? 'text-amber-500 border-amber-500/30 bg-amber-500/10'
+        : 'text-blue-500 border-blue-500/30 bg-blue-500/10';
 
   return (
     <Card 
       onClick={() => router.push(`/project/${project.id}`)}
-      className={`group flex flex-col transition-all overflow-hidden relative cursor-pointer hover:shadow-lg hover:-translate-y-0.5 ${isPending ? 'border-amber-500/20' : 'hover:border-primary/50'}`}
+      className={`group flex flex-col transition-all overflow-hidden relative cursor-pointer hover:shadow-lg hover:-translate-y-0.5 ${isPending ? 'border-amber-500/20' : isPaused ? 'border-red-500/20 opacity-80' : 'hover:border-primary/50'}`}
     >
       <div className={`h-1.5 w-full ${bannerColor}`} />
 
@@ -264,7 +289,7 @@ function ProjectCard({ project, isFocus = false, isPending = false, isCompleted 
         </div>
       </CardContent>
 
-      {!isCompleted && onComplete && (
+      {!isCompleted && !isPaused && onComplete && (
         <CardFooter className="px-5 pb-5 pt-0 mt-auto">
           <Button 
             variant={"outline"} 
@@ -275,7 +300,7 @@ function ProjectCard({ project, isFocus = false, isPending = false, isCompleted 
             }}
           >
             <CheckCircle2 className="mr-2 h-4 w-4" /> 
-            {isPending ? '确认结项完成' : '打钩结项'}
+            {isPending ? '确认结项归档' : '打钩已完成'}
           </Button>
         </CardFooter>
       )}
