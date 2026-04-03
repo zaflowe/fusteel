@@ -1,4 +1,4 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_, func
 from uuid import UUID
 from datetime import datetime, timedelta
@@ -327,6 +327,31 @@ def get_project_updates(db: Session, project_id: UUID) -> List[models.ProjectUpd
 def get_project_update(db: Session, update_id: UUID) -> Optional[models.ProjectUpdate]:
     """获取单个固化记录"""
     return db.query(models.ProjectUpdate).filter(models.ProjectUpdate.id == update_id).first()
+
+def get_all_history(db: Session, limit: int = 50):
+    return db.query(
+        models.ProjectUpdate,
+        models.Project.title.label("project_title")
+    ).options(joinedload(models.ProjectUpdate.remarks)).join(
+        models.Project, models.ProjectUpdate.project_id == models.Project.id
+    ).order_by(
+        models.ProjectUpdate.created_at.desc()
+    ).limit(limit).all()
+
+def update_history_remark(db: Session, update_id: UUID, remark: str) -> Optional[models.ProjectUpdate]:
+    # 废弃的旧方法，保留兼容性或直接删除。此处保留空实现。
+    pass
+
+def create_history_remark(db: Session, update_id: UUID, content: str, created_by: str = "用户") -> models.ProjectLogRemark:
+    new_remark = models.ProjectLogRemark(
+        update_id=update_id,
+        content=content,
+        created_by=created_by
+    )
+    db.add(new_remark)
+    db.commit()
+    db.refresh(new_remark)
+    return new_remark
 
 
 # ---- 项目周期延期历史 CRUD ----

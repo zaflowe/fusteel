@@ -94,9 +94,22 @@ class ProjectUpdate(Base):
     reporter_name = Column(String, nullable=False, comment="填报人姓名")
     content = Column(String, nullable=False, comment="汇报内容")
     image_urls = Column(JSONB, default=list, comment="图片URL列表")
+    remark = Column(String, nullable=True, comment="备注")
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, comment="固化时间戳")
 
     project = relationship("Project", back_populates="updates")
+    remarks = relationship("ProjectLogRemark", back_populates="project_update", cascade="all, delete-orphan", order_by="ProjectLogRemark.created_at.asc()")
+
+class ProjectLogRemark(Base):
+    __tablename__ = "project_log_remarks"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    update_id = Column(UUID(as_uuid=True), ForeignKey("project_updates.id", ondelete="CASCADE"), nullable=False, index=True)
+    content = Column(String, nullable=False, comment="备注内容")
+    created_by = Column(String, default="用户", comment="发表人")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    project_update = relationship("ProjectUpdate", back_populates="remarks")
 
 class AIPendingAction(Base):
     __tablename__ = "ai_pending_actions"

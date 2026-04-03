@@ -138,6 +138,15 @@ class AIConfigListResponse(BaseModel):
 
 # ---- 项目固化记录 Schema ----
 
+class ProjectLogRemarkResponse(BaseModel):
+    id: str
+    content: str
+    created_by: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
 class ProjectUpdateCreate(BaseModel):
     reporter_name: str
     content: str
@@ -149,10 +158,17 @@ class ProjectUpdateResponse(BaseModel):
     reporter_name: str
     content: str
     image_urls: List[str]
+    remarks: List[ProjectLogRemarkResponse] = []
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+class HistoryItemResponse(ProjectUpdateResponse):
+    project_title: str
+
+class HistoryRemarkCreate(BaseModel):
+    content: str
 
 
 # ---- 项目周期延期历史 Schema ----

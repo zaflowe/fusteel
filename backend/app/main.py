@@ -597,6 +597,36 @@ def get_project_updates(id: uuid.UUID, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Project not found")
     return crud.get_project_updates(db, id)
 
+@app.get("/api/history", response_model=List[schemas.HistoryItemResponse])
+def get_global_history(limit: int = Query(50, description="限制返回的数量"), db: Session = Depends(get_db)):
+    """获取全站最新项目固化纪录"""
+    rows = crud.get_all_history(db, limit=limit)
+    res = []
+    for update_obj, project_title in rows:
+        item_dict = {
+            "id": update_obj.id,
+            "project_id": update_obj.project_id,
+            "reporter_name": update_obj.reporter_name,
+            "content": update_obj.content,
+            "image_urls": update_obj.image_urls,
+            "remark": update_obj.remark,
+            "created_at": update_obj.created_at,
+            "project_title": project_title
+        }
+        res.append(item_dict)
+    return res
+
+@app.post("/api/history/{id}/remarks", response_model=schemas.ProjectLogRemarkResponse)
+def create_history_remark(id: uuid.UUID, payload: schemas.HistoryRemarkCreate, db: Session = Depends(get_db)):
+    """向某个历史固化记录追加备注"""
+    # 验证记录是否存在
+    update_record = crud.get_project_update(db, id)
+    if not update_record:
+        raise HTTPException(status_code=404, detail="History update record not found")
+    
+    new_remark = crud.create_history_remark(db, update_id=id, content=payload.content)
+    return new_remark
+
 @app.post("/api/projects/{id}/updates", response_model=schemas.ProjectUpdateResponse, status_code=201)
 def create_project_update(id: uuid.UUID, update: schemas.ProjectUpdateCreate, db: Session = Depends(get_db)):
     """创建项目固化记录"""

@@ -1,7 +1,9 @@
 'use client';
 
+import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { AIChatBot } from '@/components/AIChatBot';
+import { siteConfig } from '@/config/site';
 
 export default function Header() {
   const pathname = usePathname();
@@ -27,7 +29,7 @@ export default function Header() {
             <div className="flex flex-1 items-center justify-between space-x-2 md:justify-end">
               <nav className="flex items-center gap-6 text-sm font-medium mr-auto">
                 <a className="transition-colors hover:text-foreground/80 text-foreground" href="/">看板</a>
-                <a className="transition-colors hover:text-foreground/80 text-foreground/60" href="/ai-scheduler">AI 调度台</a>
+                <Link href="/ai-scheduler" className="transition-colors hover:text-foreground/80 text-foreground/60">{siteConfig.nav.scheduler}</Link>
                 <a className="transition-colors hover:text-foreground/80 text-foreground/60" href="/files">智汇文件</a>
               </nav>
               <div className="w-full flex-1 md:w-auto md:flex-none">
