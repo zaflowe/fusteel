@@ -94,7 +94,6 @@ class ProjectUpdate(Base):
     reporter_name = Column(String, nullable=False, comment="填报人姓名")
     content = Column(String, nullable=False, comment="汇报内容")
     image_urls = Column(JSONB, default=list, comment="图片URL列表")
-    remark = Column(String, nullable=True, comment="备注")
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, comment="固化时间戳")
 
     project = relationship("Project", back_populates="updates")

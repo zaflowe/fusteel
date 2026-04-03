@@ -609,7 +609,7 @@ def get_global_history(limit: int = Query(50, description="限制返回的数量
             "reporter_name": update_obj.reporter_name,
             "content": update_obj.content,
             "image_urls": update_obj.image_urls,
-            "remark": update_obj.remark,
+            "remarks": update_obj.remarks,
             "created_at": update_obj.created_at,
             "project_title": project_title
         }
