@@ -6,16 +6,18 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Search, Calendar, Activity, CheckCircle2, ChevronRight, Database, Clock, User, FileSpreadsheet, FileArchive, AlertCircle } from 'lucide-react';
+import { Search, Calendar, Activity, CheckCircle2, ChevronRight, Database, Clock, User, FileSpreadsheet, FileArchive, AlertCircle, FileUp } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import ProjectCycleBadge from '@/components/ProjectCycleBadge';
+import PdfImportDialog from '@/components/PdfImportDialog';
 
 export default function DashboardPage() {
   const { projects, loading, keyword, setKeyword, fetchProjects, completeProject, uploadExcel, exportExcel, exportAllFilesZip } = useProjectStore();
   const [searchInput, setSearchInput] = useState(keyword);
+  const [pdfDialogOpen, setPdfDialogOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -89,7 +91,17 @@ export default function DashboardPage() {
             className="border-primary/50 text-primary hover:bg-primary/10 shrink-0"
             onClick={() => fileInputRef.current?.click()}
           >
-             <Database className="h-4 w-4 mr-2" /> 导入
+             <Database className="h-4 w-4 mr-2" /> 导入Excel
+          </Button>
+
+          <Button 
+            type="button" 
+            variant="outline"
+            size="sm"
+            className="border-rose-500/50 text-rose-600 hover:bg-rose-500/10 shrink-0"
+            onClick={() => setPdfDialogOpen(true)}
+          >
+             <FileUp className="h-4 w-4 mr-2" /> 导入PDF
           </Button>
 
           <Button 
@@ -215,6 +227,9 @@ export default function DashboardPage() {
           )}
         </>
       )}
+
+      {/* PDF 批量导入弹窗 */}
+      <PdfImportDialog open={pdfDialogOpen} onOpenChange={setPdfDialogOpen} />
     </div>
   );
 }

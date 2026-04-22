@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, use, useRef } from 'react';
+import { useEffect, useState, use, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { useProjectStore, Project } from '@/store/projectStore';
+import { useProjectStore, Project, ProjectChangeLog } from '@/store/projectStore';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -14,7 +14,8 @@ import {
   UploadCloud, FileText, CheckCircle2, ArrowLeft, Plus, X, 
   User, Users, Calendar, Trash2, Download, File, FileSpreadsheet, 
   Presentation, Loader2, Archive, Tag, Camera, Edit3, Clock,
-  AlertCircle, History
+  AlertCircle, History, UserCheck, UserPlus, Activity, Save,
+  Wrench, Lightbulb
 } from 'lucide-react';
 import {
   Dialog,
@@ -62,41 +63,72 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const [managingTags, setManagingTags] = useState(false);
   const [updates, setUpdates] = useState<any[]>([]);
   const [updatesLoading, setUpdatesLoading] = useState(false);
-  const [delayHistory, setDelayHistory] = useState<any[]>([]);
+  const [changeLogs, setChangeLogs] = useState<ProjectChangeLog[]>([]);
   const [showEditModal, setShowEditModal] = useState(false);
   const [newEndDate, setNewEndDate] = useState('');
   const [delayReason, setDelayReason] = useState('');
   const [updating, setUpdating] = useState(false);
-  const [editingField, setEditingField] = useState<'leader' | 'participants' | null>(null);
+
+  // 内联编辑的字段类型：覆盖负责人/参与人员/交付后负责人/提出者 + 开始时间
+  type InlineField = 'leader' | 'participants' | 'post_delivery_person' | 'proposer' | 'planned_start_date';
+  const [editingField, setEditingField] = useState<InlineField | null>(null);
   const [editValue, setEditValue] = useState('');
+
+  // 现状问题 / 采取的措施：整块文本框编辑
+  type TextBlockField = 'current_problem' | 'technical_solution';
+  const [editingBlock, setEditingBlock] = useState<TextBlockField | null>(null);
+  const [blockDraft, setBlockDraft] = useState('');
   
   const { addTag, removeTag, updateProject } = useProjectStore();
 
   const handleInlineSave = async () => {
     if (!editingField) return;
     try {
+      const v = editValue.trim();
       if (editingField === 'leader') {
-        await updateProject(id, { leader: editValue.trim() });
+        await updateProject(id, { leader: v });
       } else if (editingField === 'participants') {
         const parts = editValue.split(/[,，、\s]+/).filter(Boolean);
         await updateProject(id, { participants: parts });
+      } else if (editingField === 'post_delivery_person') {
+        await updateProject(id, { post_delivery_person: v });
+      } else if (editingField === 'proposer') {
+        await updateProject(id, { proposer: v });
+      } else if (editingField === 'planned_start_date') {
+        // 日期：空串 → 清空
+        await updateProject(id, { planned_start_date: v ? new Date(v).toISOString() : null } as any);
       }
-      toast.success('人员信息更新成功');
+      toast.success('已保存');
       await fetchDetails();
-    } catch (error) {
-      toast.error('更新失败');
+      await fetchChangeLogs();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.detail || '更新失败');
     } finally {
       setEditingField(null);
     }
   };
 
-  // 获取延期历史
-  const fetchDelayHistory = async () => {
+  const handleBlockSave = async () => {
+    if (!editingBlock) return;
     try {
-      const res = await axios.get(`${API_URL}/projects/${id}/delay-history`);
-      setDelayHistory(res.data);
+      await updateProject(id, { [editingBlock]: blockDraft } as any);
+      toast.success('已保存');
+      await fetchDetails();
+      await fetchChangeLogs();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.detail || '保存失败');
+    } finally {
+      setEditingBlock(null);
+    }
+  };
+
+  // 获取变更记录（干预动作）
+  const fetchChangeLogs = async () => {
+    try {
+      const res = await axios.get(`${API_URL}/projects/${id}/change-logs`);
+      setChangeLogs(res.data);
     } catch (error) {
-      console.error("获取延期历史失败", error);
+      console.error("获取变更记录失败", error);
     }
   };
 
@@ -138,28 +170,28 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   useEffect(() => {
     fetchDetails();
     fetchUpdates();
-    fetchDelayHistory();
+    fetchChangeLogs();
   }, [id]);
 
-  // 处理保存周期修改
+  // 处理保存项目结束时间（需要原因）
   const handleSaveCycle = async () => {
     if (!newEndDate || !delayReason.trim()) {
-      toast.error('请填写结项时间和延期原因');
+      toast.error('请填写项目结束时间和变更原因');
       return;
     }
     
     setUpdating(true);
     try {
       await axios.put(`${API_URL}/projects/${id}`, {
-        end_date: newEndDate,
+        planned_end_date: newEndDate,
         delay_reason: delayReason
       });
-      toast.success('项目周期更新成功');
+      toast.success('项目结束时间已更新');
       setShowEditModal(false);
       setNewEndDate('');
       setDelayReason('');
       await fetchDetails();
-      await fetchDelayHistory();
+      await fetchChangeLogs();
     } catch (error: any) {
       toast.error(error.response?.data?.detail || '更新失败');
     } finally {
@@ -262,16 +294,21 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
             <div className="flex items-center gap-3 flex-wrap">
               <h1 className="text-3xl font-bold">{project.title}</h1>
               {/* 周期状态标签 - 显示在项目名称右侧 */}
-              {project.end_date && (
+              {(project.planned_end_date || project.end_date) && (
                 <div 
                   className="cursor-pointer hover:opacity-80 transition-opacity"
                   onClick={() => {
-                    setNewEndDate(format(new Date(project.end_date!), 'yyyy-MM-dd'));
+                    const raw = project.planned_end_date || project.end_date!;
+                    setNewEndDate(format(new Date(raw), 'yyyy-MM-dd'));
                     setShowEditModal(true);
                   }}
-                  title="点击修改周期"
+                  title="点击修改项目结束时间"
                 >
-                  <ProjectCycleBadge createdAt={project.created_at} endDate={project.end_date} compact />
+                  <ProjectCycleBadge 
+                    createdAt={project.planned_start_date || project.created_at} 
+                    endDate={project.planned_end_date || project.end_date!} 
+                    compact 
+                  />
                 </div>
               )}
             </div>
@@ -305,7 +342,9 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           </div>
         </div>
 
+        {/* 人员信息：2 行 x 3 列 */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6 pt-6 border-t">
+          {/* Row1 col1: 项目编号 */}
           <div className="flex items-center gap-3">
             <div className="h-5 w-5 flex items-center justify-center text-gray-500 font-mono text-xs font-bold">ID</div>
             <div>
@@ -315,80 +354,126 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-3 group">
-            <User className="h-5 w-5 text-blue-500 flex-shrink-0" />
-            <div className="flex-1">
-              <div className="text-sm text-muted-foreground flex items-center justify-between">
-                项目负责人
-                {editingField !== 'leader' && (
-                  <Edit3 className="h-3 w-3 opacity-0 group-hover:opacity-100 cursor-pointer hover:text-primary transition-opacity" 
-                    onClick={() => { setEditingField('leader'); setEditValue(project.leader || ''); }} 
-                  />
-                )}
-              </div>
-              {editingField === 'leader' ? (
-                <div className="flex items-center gap-1 mt-1">
-                  <Input autoFocus size={10} className="h-7 text-xs px-2" value={editValue} onChange={e => setEditValue(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleInlineSave()} onBlur={handleInlineSave} />
-                </div>
-              ) : (
-                <div className="font-medium">{project.leader || '未指定'}</div>
-              )}
-            </div>
-          </div>
-          <div className="flex items-center gap-3 group">
-            <Users className="h-5 w-5 text-purple-500 flex-shrink-0" />
-            <div className="flex-1">
-              <div className="text-sm text-muted-foreground flex items-center justify-between">
-                项目参与人员
-                {editingField !== 'participants' && (
-                  <Edit3 className="h-3 w-3 opacity-0 group-hover:opacity-100 cursor-pointer hover:text-primary transition-opacity" 
-                    onClick={() => { setEditingField('participants'); setEditValue((project.participants || []).join(', ')); }} 
-                  />
-                )}
-              </div>
-              {editingField === 'participants' ? (
-                <div className="flex items-center gap-1 mt-1">
-                  <Input autoFocus className="h-7 text-xs px-2" value={editValue} onChange={e => setEditValue(e.target.value)} placeholder="逗号或空格分隔" onKeyDown={e => e.key === 'Enter' && handleInlineSave()} onBlur={handleInlineSave} />
-                </div>
-              ) : (
-                <div className="font-medium line-clamp-2" title={project.participants?.join('、')}>
-                  {project.participants?.length > 0 ? project.participants.join('、') : '暂无参与人员'}
-                </div>
-              )}
-            </div>
-          </div>
+          {/* Row1 col2: 项目负责人 */}
+          <InlinePersonField
+            icon={<User className="h-5 w-5 text-blue-500 flex-shrink-0" />}
+            label="项目负责人"
+            value={project.leader || ''}
+            placeholder="未指定"
+            editing={editingField === 'leader'}
+            editValue={editValue}
+            onEditStart={() => { setEditingField('leader'); setEditValue(project.leader || ''); }}
+            onEditValueChange={setEditValue}
+            onSave={handleInlineSave}
+          />
+          {/* Row1 col3: 项目参与人员 */}
+          <InlinePersonField
+            icon={<Users className="h-5 w-5 text-purple-500 flex-shrink-0" />}
+            label="项目参与人员"
+            value={(project.participants && project.participants.length > 0) ? project.participants.join('、') : ''}
+            placeholder="暂无参与人员"
+            editing={editingField === 'participants'}
+            editValue={editValue}
+            editPlaceholder="逗号或空格分隔"
+            onEditStart={() => { setEditingField('participants'); setEditValue((project.participants || []).join(', ')); }}
+            onEditValueChange={setEditValue}
+            onSave={handleInlineSave}
+          />
+          {/* Row2 col1: 项目交付后负责人 */}
+          <InlinePersonField
+            icon={<UserCheck className="h-5 w-5 text-emerald-500 flex-shrink-0" />}
+            label="项目交付后负责人"
+            value={project.post_delivery_person || ''}
+            placeholder="未指定"
+            editing={editingField === 'post_delivery_person'}
+            editValue={editValue}
+            onEditStart={() => { setEditingField('post_delivery_person'); setEditValue(project.post_delivery_person || ''); }}
+            onEditValueChange={setEditValue}
+            onSave={handleInlineSave}
+          />
+          {/* Row2 col2: 项目提出者 */}
+          <InlinePersonField
+            icon={<UserPlus className="h-5 w-5 text-amber-500 flex-shrink-0" />}
+            label="项目提出者"
+            value={project.proposer || ''}
+            placeholder="未指定"
+            editing={editingField === 'proposer'}
+            editValue={editValue}
+            onEditStart={() => { setEditingField('proposer'); setEditValue(project.proposer || ''); }}
+            onEditValueChange={setEditValue}
+            onSave={handleInlineSave}
+          />
+          {/* Row2 col3: 留白 */}
+          <div className="hidden md:block" />
         </div>
 
-        {/* 项目周期编辑区域 */}
-        <div className="mt-4 p-3 bg-secondary/30 rounded-lg flex items-center gap-2 flex-wrap">
+        {/* 项目周期编辑区域：开始时间（内联编辑）+ 结束时间（弹窗） */}
+        <div className="mt-4 p-3 bg-secondary/30 rounded-lg flex items-center gap-4 flex-wrap">
           <Clock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
           <span className="text-sm text-muted-foreground">项目周期：</span>
-          {project.end_date ? (
-            <>
-              <span className="text-sm font-medium">
-                {format(new Date(project.created_at), 'yyyy/MM/dd')} 至 {format(new Date(project.end_date), 'yyyy/MM/dd')}
-              </span>
-              {project.delay_reason && (
-                <span className="text-orange-600 text-xs" title={project.delay_reason}>
-                  （延期：{project.delay_reason.length > 20 ? project.delay_reason.slice(0, 20) + '…' : project.delay_reason}）
-                </span>
-              )}
-            </>
-          ) : (
-            <span className="text-sm text-muted-foreground">未设置结项时间</span>
+
+          {/* 开始时间 */}
+          <div className="inline-flex items-center gap-1">
+            <span className="text-xs text-muted-foreground">开始</span>
+            {editingField === 'planned_start_date' ? (
+              <Input
+                type="date"
+                autoFocus
+                className="h-7 w-36 text-xs px-2"
+                value={editValue}
+                onChange={e => setEditValue(e.target.value)}
+                onBlur={handleInlineSave}
+                onKeyDown={e => e.key === 'Enter' && handleInlineSave()}
+              />
+            ) : (
+              <button
+                className="text-sm font-medium inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-primary/10 hover:text-primary transition-colors"
+                onClick={() => {
+                  setEditingField('planned_start_date');
+                  setEditValue(project.planned_start_date
+                    ? format(new Date(project.planned_start_date), 'yyyy-MM-dd')
+                    : '');
+                }}
+                title="点击修改项目开始时间"
+              >
+                {project.planned_start_date
+                  ? format(new Date(project.planned_start_date), 'yyyy/MM/dd')
+                  : <span className="text-muted-foreground">未设置</span>}
+                <Edit3 className="h-3 w-3 opacity-60" />
+              </button>
+            )}
+          </div>
+
+          <span className="text-muted-foreground">—</span>
+
+          {/* 结束时间 */}
+          <div className="inline-flex items-center gap-1">
+            <span className="text-xs text-muted-foreground">结束</span>
+            {(() => {
+              const endRaw = project.planned_end_date || project.end_date;
+              return (
+                <button
+                  className="text-sm font-medium inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-primary/10 hover:text-primary transition-colors"
+                  onClick={() => {
+                    setNewEndDate(endRaw ? format(new Date(endRaw), 'yyyy-MM-dd') : '');
+                    setShowEditModal(true);
+                  }}
+                  title="修改项目结束时间（需原因）"
+                >
+                  {endRaw
+                    ? format(new Date(endRaw), 'yyyy/MM/dd')
+                    : <span className="text-muted-foreground">未设置</span>}
+                  <Edit3 className="h-3 w-3 opacity-60" />
+                </button>
+              );
+            })()}
+          </div>
+
+          {project.delay_reason && (
+            <span className="text-orange-600 text-xs" title={project.delay_reason}>
+              （最近变更原因：{project.delay_reason.length > 20 ? project.delay_reason.slice(0, 20) + '…' : project.delay_reason}）
+            </span>
           )}
-          {/* 细微内联编辑图标 */}
-          <button
-            className="ml-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors cursor-pointer rounded px-1.5 py-0.5 hover:bg-primary/10"
-            onClick={() => {
-              setNewEndDate(project.end_date ? format(new Date(project.end_date), 'yyyy-MM-dd') : '');
-              setShowEditModal(true);
-            }}
-            title="修改项目周期"
-          >
-            <Edit3 className="h-3 w-3" />
-            <span>编辑</span>
-          </button>
         </div>
 
         {/* 标签管理区域 */}
@@ -487,6 +572,34 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
         />
       </section>
 
+      {/* 现状问题 / 采取的措施 */}
+      <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <EditableTextCard
+          icon={<AlertCircle className="h-5 w-5 text-rose-500" />}
+          title="现状问题"
+          helpText="来自立项申请表『目前存在的问题』"
+          value={project.current_problem || ''}
+          editing={editingBlock === 'current_problem'}
+          draft={blockDraft}
+          onEditStart={() => { setEditingBlock('current_problem'); setBlockDraft(project.current_problem || ''); }}
+          onDraftChange={setBlockDraft}
+          onSave={handleBlockSave}
+          onCancel={() => setEditingBlock(null)}
+        />
+        <EditableTextCard
+          icon={<Wrench className="h-5 w-5 text-indigo-500" />}
+          title="采取的措施"
+          helpText="来自立项申请表『解决的技术指标及主要方案』"
+          value={project.technical_solution || ''}
+          editing={editingBlock === 'technical_solution'}
+          draft={blockDraft}
+          onEditStart={() => { setEditingBlock('technical_solution'); setBlockDraft(project.technical_solution || ''); }}
+          onDraftChange={setBlockDraft}
+          onSave={handleBlockSave}
+          onCancel={() => setEditingBlock(null)}
+        />
+      </section>
+
       {/* 项目固化记录区块 */}
       <section className="space-y-6">
         <div className="flex justify-between items-center">
@@ -506,89 +619,47 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
             />
           </div>
 
-          {/* 右侧：历史记录（包含固化记录和周期变更） */}
+          {/* 右侧：统一时间轴（固化记录 + 变更记录） */}
           <div className="space-y-4">
             <h3 className="text-lg font-semibold text-muted-foreground">历史记录</h3>
-            
-            {/* 周期变更历史 */}
-            {delayHistory.length > 0 && (
-              <div className="mb-4">
-                <h4 className="text-sm font-medium text-muted-foreground mb-2 flex items-center gap-2">
-                  <History className="h-4 w-4" />
-                  周期变更记录
-                </h4>
-                <div className="space-y-2">
-                  {delayHistory.map((record, index) => (
-                    <div 
-                      key={record.id} 
-                      className="flex items-start gap-2 p-2 bg-orange-50 rounded-lg border border-orange-100"
-                    >
-                      <div className="flex-shrink-0 w-5 h-5 rounded-full bg-orange-100 flex items-center justify-center text-xs font-medium text-orange-600">
-                        {delayHistory.length - index}
-                      </div>
-                      <div className="flex-1 text-xs">
-                        <div>
-                          <span className="text-muted-foreground">原定</span>
-                          <span className="font-medium mx-1">
-                            {record.old_end_date 
-                              ? format(new Date(record.old_end_date), 'yyyy/MM/dd') 
-                              : '未设置'}
-                          </span>
-                          <span className="text-muted-foreground">→</span>
-                          <span className="font-medium mx-1 text-primary">
-                            {format(new Date(record.new_end_date), 'yyyy/MM/dd')}
-                          </span>
-                        </div>
-                        <div className="text-orange-600 mt-0.5">
-                          原因：{record.reason}
-                        </div>
-                        <div className="text-muted-foreground text-[10px] mt-0.5">
-                          {format(new Date(record.created_at), 'yyyy-MM-dd HH:mm')} · {record.changed_by}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            
-            {/* 固化记录时间轴 */}
+            <p className="text-xs text-muted-foreground">
+              包含项目的『固化记录』与所有的『干预动作（字段编辑、标签、状态、文件、PDF 导入等）』
+            </p>
             {updatesLoading ? (
               <div className="text-center py-8 text-muted-foreground">
                 <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2" />
-                <p>加载固化记录...</p>
+                <p>加载历史记录...</p>
               </div>
             ) : (
-              <UpdateTimeline updates={updates} />
+              <MergedTimeline updates={updates} changeLogs={changeLogs} />
             )}
           </div>
         </div>
       </section>
 
-      {/* 修改周期 Modal */}
+      {/* 修改项目结束时间 Modal */}
       <Dialog open={showEditModal} onOpenChange={setShowEditModal}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Clock className="h-5 w-5" />
-              修改项目周期
+              修改项目结束时间
             </DialogTitle>
             <DialogDescription>
-              调整项目结项时间，系统将自动记录变更历史
+              调整项目结束时间必须填写变更原因，系统会自动记录到干预动作
             </DialogDescription>
           </DialogHeader>
           
           <div className="space-y-4 py-4">
             <div className="space-y-2">
               <Label htmlFor="endDate">
-                新的结项时间 <span className="text-destructive">*</span>
+                新的项目结束时间 <span className="text-destructive">*</span>
               </Label>
               <Input
                 id="endDate"
                 type="date"
                 value={newEndDate}
                 onChange={(e) => setNewEndDate(e.target.value)}
-                min={format(new Date(), 'yyyy-MM-dd')}
               />
             </div>
             
@@ -598,13 +669,13 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
               </Label>
               <Textarea
                 id="delayReason"
-                placeholder="请详细说明延期原因（必填）"
+                placeholder="请详细说明变更原因（必填）"
                 value={delayReason}
                 onChange={(e) => setDelayReason(e.target.value)}
                 rows={3}
               />
               <p className="text-xs text-muted-foreground">
-                修改周期必须填写原因，以便追溯变更记录
+                修改结束时间必须填写原因，以便追溯变更记录
               </p>
             </div>
           </div>
@@ -636,6 +707,215 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function InlinePersonField({
+  icon, label, value, placeholder = '',
+  editing, editValue, editPlaceholder,
+  onEditStart, onEditValueChange, onSave,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  placeholder?: string;
+  editing: boolean;
+  editValue: string;
+  editPlaceholder?: string;
+  onEditStart: () => void;
+  onEditValueChange: (v: string) => void;
+  onSave: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-3 group">
+      {icon}
+      <div className="flex-1 min-w-0">
+        <div className="text-sm text-muted-foreground flex items-center justify-between">
+          {label}
+          {!editing && (
+            <Edit3
+              className="h-3 w-3 opacity-0 group-hover:opacity-100 cursor-pointer hover:text-primary transition-opacity"
+              onClick={onEditStart}
+            />
+          )}
+        </div>
+        {editing ? (
+          <div className="flex items-center gap-1 mt-1">
+            <Input
+              autoFocus
+              className="h-7 text-xs px-2"
+              value={editValue}
+              placeholder={editPlaceholder}
+              onChange={e => onEditValueChange(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && onSave()}
+              onBlur={onSave}
+            />
+          </div>
+        ) : (
+          <div className="font-medium line-clamp-2 truncate" title={value}>
+            {value || <span className="text-muted-foreground">{placeholder}</span>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EditableTextCard({
+  icon, title, helpText, value, editing, draft,
+  onEditStart, onDraftChange, onSave, onCancel,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  helpText?: string;
+  value: string;
+  editing: boolean;
+  draft: string;
+  onEditStart: () => void;
+  onDraftChange: (v: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <Card className="h-full">
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            {icon}
+            <CardTitle className="text-base">{title}</CardTitle>
+          </div>
+          {!editing ? (
+            <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={onEditStart}>
+              <Edit3 className="h-3 w-3 mr-1" /> 编辑
+            </Button>
+          ) : (
+            <div className="flex items-center gap-1">
+              <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={onCancel}>
+                <X className="h-3 w-3 mr-1" /> 取消
+              </Button>
+              <Button size="sm" className="h-7 px-2 text-xs" onClick={onSave}>
+                <Save className="h-3 w-3 mr-1" /> 保存
+              </Button>
+            </div>
+          )}
+        </div>
+        {helpText && <CardDescription className="text-xs">{helpText}</CardDescription>}
+      </CardHeader>
+      <CardContent>
+        {editing ? (
+          <Textarea
+            autoFocus
+            className="min-h-[140px] text-sm"
+            value={draft}
+            onChange={e => onDraftChange(e.target.value)}
+            placeholder="请输入内容..."
+          />
+        ) : value ? (
+          <p className="text-sm whitespace-pre-wrap leading-relaxed min-h-[120px]">{value}</p>
+        ) : (
+          <p className="text-sm text-muted-foreground italic min-h-[120px] flex items-center justify-center">
+            暂无内容，点击右上角"编辑"补充
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// 合并 固化记录(updates) + 干预动作(changeLogs) 到一条时间轴
+function MergedTimeline({
+  updates, changeLogs,
+}: {
+  updates: any[];
+  changeLogs: ProjectChangeLog[];
+}) {
+  type Item =
+    | { kind: 'update'; at: number; raw: any }
+    | { kind: 'change'; at: number; raw: ProjectChangeLog };
+
+  const items: Item[] = useMemo(() => {
+    const us: Item[] = (updates || []).map((u: any) => ({
+      kind: 'update', at: new Date(u.created_at).getTime(), raw: u,
+    }));
+    const cs: Item[] = (changeLogs || []).map((c) => ({
+      kind: 'change', at: new Date(c.created_at).getTime(), raw: c,
+    }));
+    return [...us, ...cs].sort((a, b) => b.at - a.at);
+  }, [updates, changeLogs]);
+
+  if (items.length === 0) {
+    return <div className="text-sm text-muted-foreground py-6 text-center">暂无历史记录</div>;
+  }
+
+  return (
+    <div className="relative border-l-2 border-muted pl-5 space-y-4 py-2">
+      {items.map((it) => it.kind === 'update'
+        ? <UpdateCard key={`u-${it.raw.id}`} item={it.raw} />
+        : <ChangeLogCard key={`c-${it.raw.id}`} item={it.raw} />
+      )}
+    </div>
+  );
+}
+
+function UpdateCard({ item }: { item: any }) {
+  const time = format(new Date(item.created_at), 'yyyy-MM-dd HH:mm');
+  return (
+    <div className="relative">
+      <div className="absolute -left-[26px] top-2 h-3 w-3 rounded-full bg-indigo-500 border-2 border-background" />
+      <Card className="shadow-sm">
+        <CardHeader className="py-2 px-3">
+          <div className="flex items-center justify-between">
+            <Badge variant="secondary" className="bg-indigo-500/10 text-indigo-600 border-0">固化记录</Badge>
+            <span className="text-[10px] text-muted-foreground">{time}</span>
+          </div>
+        </CardHeader>
+        <CardContent className="py-2 px-3 space-y-2">
+          <div className="text-xs text-muted-foreground">
+            <User className="inline w-3 h-3 mr-1" />{item.reporter_name}
+          </div>
+          <p className="text-sm whitespace-pre-wrap leading-relaxed">{item.content}</p>
+          {item.image_urls && item.image_urls.length > 0 && (
+            <div className="flex flex-wrap gap-2 pt-1">
+              {item.image_urls.map((url: string, idx: number) => (
+                <img key={idx} src={url} alt="" className="h-16 w-16 object-cover rounded border" />
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+const CHANGELOG_STYLE: Record<string, { label: string; dot: string; bg: string; text: string }> = {
+  field_edit:    { label: '字段编辑', dot: 'bg-sky-500',      bg: 'bg-sky-500/10',     text: 'text-sky-600' },
+  date_edit:     { label: '开始时间', dot: 'bg-blue-500',     bg: 'bg-blue-500/10',    text: 'text-blue-600' },
+  date_delay:    { label: '结束时间', dot: 'bg-orange-500',   bg: 'bg-orange-500/10',  text: 'text-orange-600' },
+  tag_add:       { label: '新增标签', dot: 'bg-emerald-500',  bg: 'bg-emerald-500/10', text: 'text-emerald-600' },
+  tag_remove:    { label: '删除标签', dot: 'bg-rose-500',     bg: 'bg-rose-500/10',    text: 'text-rose-600' },
+  status_change: { label: '状态变更', dot: 'bg-purple-500',   bg: 'bg-purple-500/10',  text: 'text-purple-600' },
+  file_upload:   { label: '上传文件', dot: 'bg-teal-500',     bg: 'bg-teal-500/10',    text: 'text-teal-600' },
+  file_delete:   { label: '删除文件', dot: 'bg-red-500',      bg: 'bg-red-500/10',     text: 'text-red-600' },
+  pdf_import:    { label: 'PDF 导入', dot: 'bg-indigo-500',   bg: 'bg-indigo-500/10',  text: 'text-indigo-600' },
+  portal_edit:   { label: '门户修改', dot: 'bg-cyan-500',     bg: 'bg-cyan-500/10',    text: 'text-cyan-600' },
+};
+
+function ChangeLogCard({ item }: { item: ProjectChangeLog }) {
+  const time = format(new Date(item.created_at), 'yyyy-MM-dd HH:mm');
+  const style = CHANGELOG_STYLE[item.action_type] || CHANGELOG_STYLE.field_edit;
+  return (
+    <div className="relative">
+      <div className={`absolute -left-[26px] top-2 h-3 w-3 rounded-full ${style.dot} border-2 border-background`} />
+      <div className="bg-card border rounded-lg px-3 py-2 flex items-start gap-2">
+        <Badge variant="secondary" className={`${style.bg} ${style.text} border-0 shrink-0`}>
+          {style.label}
+        </Badge>
+        <div className="flex-1 text-sm">
+          <div className="leading-relaxed">{item.summary}</div>
+          <div className="text-[10px] text-muted-foreground mt-0.5">{time}</div>
+        </div>
+      </div>
     </div>
   );
 }

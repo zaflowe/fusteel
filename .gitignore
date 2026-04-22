@@ -30,3 +30,20 @@ Thumbs.db
 
 # Logs
 *.log
+
+# 仓库根目录下的临时调试脚本与产物（不进库，本地自用）
+/db_audit.py
+/db_audit.txt
+/pdf_deep.py
+/pdf_deep_analysis.txt
+/read_all.py
+/read_all2.py
+/read_files.py
+/extracted_data.txt
+/_check.xlsx
+/_export_test.xlsx
+
+# 仓库根目录下的业务原始资料（立项 PDF / Excel 汇总），只在本地留，避免污染代码库
+/*.pdf
+/*.xls
+/*.xlsx

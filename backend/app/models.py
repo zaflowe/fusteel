@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, Integer, Boolean, DateTime, ForeignKey, Enum as SQLEnum
+from sqlalchemy import Column, String, Integer, Float, Boolean, DateTime, Text, ForeignKey, Enum as SQLEnum
 from sqlalchemy.orm import relationship
 from sqlalchemy.types import Uuid as UUID
 from sqlalchemy import JSON as JSONB
@@ -44,11 +44,33 @@ class Project(Base):
     end_date = Column(DateTime, nullable=True, comment="结项时间")  # 项目结束时间
     delay_reason = Column(String, nullable=True, comment="当前延期原因")  # 最近一次延期原因
 
+    # ── PDF 立项申请导入字段 ──────────────────────────────────────
+    proposer = Column(String, nullable=True, comment="改造项目提出者")
+    post_delivery_person = Column(String, nullable=True, comment="项目交付后负责人")
+    improvement_site = Column(JSONB, default=list, comment="改造项目场地，如['长材厂','特钢厂']")
+    owning_company = Column(JSONB, default=list, comment="所属公司，如['富钢']")
+    improvement_purpose = Column(JSONB, default=list, comment="改善目的，如['工艺改善','安全环保']")
+    improvement_method = Column(JSONB, default=list, comment="改善方法，如['技术改造']")
+    needs_evaluation = Column(String, nullable=True, comment="是否需要能评/环评/安评")
+    implementation_period = Column(Integer, nullable=True, comment="实施周期（月）")
+    planned_start_date = Column(DateTime, nullable=True, comment="预计开始日期")
+    planned_end_date = Column(DateTime, nullable=True, comment="预计结束日期（= planned_start_date + implementation_period 个月）")
+    budget = Column(Float, nullable=True, comment="投入（万元）- 纯数字，用于统计计算")
+    budget_text = Column(String, nullable=True, comment="投入原始文本，如 '>1' '约 5' '0.5'，用于 Excel 导出")
+    expected_revenue = Column(Float, nullable=True, comment="预计收益（万元/年）- 纯数字，用于统计计算")
+    expected_revenue_text = Column(String, nullable=True, comment="预计收益原始文本，如 '>1' '约 5'，用于 Excel 导出")
+    is_one_time_investment = Column(Boolean, nullable=True, comment="是否一次性投入")
+    is_one_time_revenue = Column(Boolean, nullable=True, comment="是否一次性收益")
+    quantitative_goal = Column(Text, nullable=True, comment="定量目标具体描述/实施效益分析")
+    current_problem = Column(Text, nullable=True, comment="目前存在的问题（项目背景）")
+    technical_solution = Column(Text, nullable=True, comment="解决的技术指标及主要方案")
+
     files = relationship("ProjectFile", back_populates="project", cascade="all, delete-orphan")
     milestones = relationship("Milestone", back_populates="project", cascade="all, delete-orphan", order_by="Milestone.created_at")
     updates = relationship("ProjectUpdate", back_populates="project", cascade="all, delete-orphan", order_by="ProjectUpdate.created_at.desc()")
     ai_actions = relationship("AIPendingAction", back_populates="project", cascade="all, delete-orphan")
     delay_history = relationship("ProjectDelayHistory", back_populates="project", cascade="all, delete-orphan", order_by="ProjectDelayHistory.created_at.desc()")
+    change_logs = relationship("ProjectChangeLog", back_populates="project", cascade="all, delete-orphan", order_by="ProjectChangeLog.created_at.desc()")
 
 class ProjectFile(Base):
     __tablename__ = "project_files"
@@ -156,3 +178,36 @@ class ProjectDelayHistory(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, comment="修改时间")
 
     project = relationship("Project", back_populates="delay_history")
+
+
+class ProjectChangeLog(Base):
+    """
+    项目干预动作留痕表（统一审计日志）。
+    任何由人（内部/外部门户）或系统对项目产生的可观测改动都在这里登记一条，
+    只记"什么项目、什么时间、做了什么"，不强制区分操作人。
+
+    action_type 取值（字符串，前端用来决定图标/颜色）：
+      field_edit      直接编辑字段（负责人/参与人员/编号/部门/提出者/交付后负责人/现状问题/采取措施…）
+      date_edit       开始时间变更（自动留痕，无需原因）
+      date_delay      结束时间变更（需延期原因，同时写 ProjectDelayHistory）
+      tag_add         新增标签
+      tag_remove      删除标签
+      status_change   状态变更（强制暂停/恢复/标记完成/归档结项）
+      file_upload     单文件上传
+      file_delete     单文件删除
+      pdf_import      PDF 批量导入聚合一条
+      portal_edit     外部门户修改（目前仅"交付后负责人"）
+    """
+    __tablename__ = "project_change_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True, comment="变更时间")
+    action_type = Column(String, nullable=False, index=True, comment="动作分类")
+    field_name = Column(String, nullable=True, comment="涉及字段（可选）")
+    old_value = Column(Text, nullable=True, comment="旧值（字符串化）")
+    new_value = Column(Text, nullable=True, comment="新值（字符串化）")
+    summary = Column(String, nullable=False, comment="一行摘要，前端直接展示")
+    details = Column(JSONB, nullable=True, comment="结构化附加信息（可选）")
+
+    project = relationship("Project", back_populates="change_logs")

@@ -10,8 +10,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { 
   UploadCloud, FileText, ArrowLeft, X, 
   User, Users, Calendar, Trash2, Download, File, FileSpreadsheet, 
-  Presentation, Loader2, Archive, Tag, Camera, LogOut, Clock
+  Presentation, Loader2, Archive, Tag, Camera, LogOut, Clock,
+  UserCheck, UserPlus, Edit3, AlertCircle, Wrench, Save
 } from 'lucide-react';
+import { Input } from '@/components/ui/input';
 import axios from 'axios';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
@@ -46,6 +48,12 @@ interface Project {
   created_at: string;
   end_date?: string | null;
   delay_reason?: string | null;
+  planned_start_date?: string | null;
+  planned_end_date?: string | null;
+  proposer?: string | null;
+  post_delivery_person?: string | null;
+  current_problem?: string | null;
+  technical_solution?: string | null;
 }
 
 export default function PortalProjectDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -59,6 +67,9 @@ export default function PortalProjectDetailPage({ params }: { params: Promise<{ 
   const [uploading, setUploading] = useState<FileType | null>(null);
   const [updates, setUpdates] = useState<any[]>([]);
   const [updatesLoading, setUpdatesLoading] = useState(false);
+  // 外部门户：交付后负责人编辑
+  const [editingDelivery, setEditingDelivery] = useState(false);
+  const [deliveryDraft, setDeliveryDraft] = useState('');
 
   // 获取门户 token
   const getPortalToken = () => {
@@ -214,6 +225,25 @@ export default function PortalProjectDetailPage({ params }: { params: Promise<{ 
     }
   };
 
+  // 外部门户：保存"交付后负责人"
+  const saveDeliveryPerson = async () => {
+    const token = getPortalToken();
+    if (!token) { handleLogout(); return; }
+    try {
+      const res = await axios.patch(
+        `${API_URL}/portal/projects/${id}/delivery-person`,
+        { post_delivery_person: deliveryDraft.trim() },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      setProject(res.data);
+      toast.success('已更新交付后负责人');
+      setEditingDelivery(false);
+    } catch (error: any) {
+      if (error.response?.status === 401) { handleLogout(); return; }
+      toast.error(error.response?.data?.detail || '更新失败');
+    }
+  };
+
   // 退出登录
   const handleLogout = () => {
     localStorage.removeItem('portal_token');
@@ -258,8 +288,12 @@ export default function PortalProjectDetailPage({ params }: { params: Promise<{ 
             <div>
               <div className="flex items-center gap-3 flex-wrap">
                 <h1 className="text-2xl font-bold">{project.title}</h1>
-                {project.end_date && (
-                  <ProjectCycleBadge createdAt={project.created_at} endDate={project.end_date} compact />
+                {(project.planned_end_date || project.end_date) && (
+                  <ProjectCycleBadge
+                    createdAt={project.planned_start_date || project.created_at}
+                    endDate={project.planned_end_date || project.end_date!}
+                    compact
+                  />
                 )}
               </div>
               <div className="flex items-center gap-3 mt-2 text-muted-foreground">
@@ -270,6 +304,7 @@ export default function PortalProjectDetailPage({ params }: { params: Promise<{ 
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6 pt-6 border-t">
+            {/* Row1 */}
             <div className="flex items-center gap-3">
               <div className="h-5 w-5 flex items-center justify-center text-gray-500 font-mono text-xs font-bold">ID</div>
               <div>
@@ -279,43 +314,87 @@ export default function PortalProjectDetailPage({ params }: { params: Promise<{ 
             </div>
             <div className="flex items-center gap-3">
               <User className="h-5 w-5 text-blue-500" />
-              <div>
+              <div className="min-w-0">
                 <div className="text-sm text-muted-foreground">项目负责人</div>
                 <div className="font-medium">{project.leader || '未指定'}</div>
               </div>
             </div>
             <div className="flex items-center gap-3">
               <Users className="h-5 w-5 text-purple-500" />
-              <div>
+              <div className="min-w-0">
                 <div className="text-sm text-muted-foreground">项目参与人员</div>
-                <div className="font-medium">
+                <div className="font-medium truncate" title={project.participants?.join('、')}>
                   {project.participants && project.participants.length > 0 
                     ? project.participants.join('、') 
                     : '暂无参与人员'}
                 </div>
               </div>
             </div>
+
+            {/* Row2 */}
+            {/* 交付后负责人：外部人员可编辑 */}
+            <div className="flex items-center gap-3 group">
+              <UserCheck className="h-5 w-5 text-emerald-500" />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm text-muted-foreground flex items-center justify-between">
+                  项目交付后负责人
+                  {!editingDelivery && (
+                    <Edit3
+                      className="h-3 w-3 opacity-0 group-hover:opacity-100 cursor-pointer hover:text-primary transition-opacity"
+                      onClick={() => { setEditingDelivery(true); setDeliveryDraft(project.post_delivery_person || ''); }}
+                    />
+                  )}
+                </div>
+                {editingDelivery ? (
+                  <div className="flex items-center gap-1 mt-1">
+                    <Input
+                      autoFocus
+                      className="h-7 text-xs px-2 flex-1"
+                      value={deliveryDraft}
+                      onChange={e => setDeliveryDraft(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') saveDeliveryPerson(); if (e.key === 'Escape') setEditingDelivery(false); }}
+                    />
+                    <Button size="sm" variant="ghost" className="h-7 px-2" onClick={saveDeliveryPerson}>
+                      <Save className="h-3 w-3" />
+                    </Button>
+                    <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => setEditingDelivery(false)}>
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="font-medium">{project.post_delivery_person || '未指定'}</div>
+                )}
+              </div>
+            </div>
+            {/* 项目提出者：只读 */}
+            <div className="flex items-center gap-3">
+              <UserPlus className="h-5 w-5 text-amber-500" />
+              <div className="min-w-0">
+                <div className="text-sm text-muted-foreground">项目提出者</div>
+                <div className="font-medium">{project.proposer || '未指定'}</div>
+              </div>
+            </div>
+            <div className="hidden md:block" />
           </div>
 
           {/* 项目周期区域（外部人员只读） */}
-          <div className="mt-4 p-3 bg-secondary/30 rounded-lg flex items-center gap-2 flex-wrap">
+          <div className="mt-4 p-3 bg-secondary/30 rounded-lg flex items-center gap-4 flex-wrap">
             <Clock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
             <span className="text-sm text-muted-foreground">项目周期：</span>
-            {project.end_date ? (
-              <>
-                <span className="text-sm font-medium">
-                  {format(new Date(project.created_at), 'yyyy/MM/dd')} 至 {format(new Date(project.end_date), 'yyyy/MM/dd')}
-                </span>
-                {project.delay_reason && (
-                  <span className="text-orange-600 text-xs" title={project.delay_reason}>
-                    （延期：{project.delay_reason.length > 20 ? project.delay_reason.slice(0, 20) + '…' : project.delay_reason}）
-                  </span>
-                )}
-              </>
-            ) : (
-              <span className="text-sm text-muted-foreground">未设置结项时间</span>
+            <span className="text-sm font-medium">
+              {project.planned_start_date
+                ? format(new Date(project.planned_start_date), 'yyyy/MM/dd')
+                : '未设置'}
+              <span className="mx-2 text-muted-foreground">—</span>
+              {(project.planned_end_date || project.end_date)
+                ? format(new Date(project.planned_end_date || project.end_date!), 'yyyy/MM/dd')
+                : '未设置'}
+            </span>
+            {project.delay_reason && (
+              <span className="text-orange-600 text-xs" title={project.delay_reason}>
+                （最近变更原因：{project.delay_reason.length > 20 ? project.delay_reason.slice(0, 20) + '…' : project.delay_reason}）
+              </span>
             )}
-            {/* 外部人员无权限编辑，因此不渲染编辑按钮 */}
           </div>
 
           {/* 标签展示（只读） */}
@@ -352,6 +431,43 @@ export default function PortalProjectDetailPage({ params }: { params: Promise<{ 
             onDownload={handleDownloadSingle} 
             onDelete={handleDelete} 
           />
+        </section>
+
+        {/* 现状问题 / 采取的措施（外部人员只读） */}
+        <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="h-5 w-5 text-rose-500" />
+                <CardTitle className="text-base">现状问题</CardTitle>
+              </div>
+              <CardDescription className="text-xs">来自立项申请表『目前存在的问题』</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {project.current_problem ? (
+                <p className="text-sm whitespace-pre-wrap leading-relaxed min-h-[120px]">{project.current_problem}</p>
+              ) : (
+                <p className="text-sm text-muted-foreground italic min-h-[120px] flex items-center justify-center">暂无内容</p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center gap-2">
+                <Wrench className="h-5 w-5 text-indigo-500" />
+                <CardTitle className="text-base">采取的措施</CardTitle>
+              </div>
+              <CardDescription className="text-xs">来自立项申请表『解决的技术指标及主要方案』</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {project.technical_solution ? (
+                <p className="text-sm whitespace-pre-wrap leading-relaxed min-h-[120px]">{project.technical_solution}</p>
+              ) : (
+                <p className="text-sm text-muted-foreground italic min-h-[120px] flex items-center justify-center">暂无内容</p>
+              )}
+            </CardContent>
+          </Card>
         </section>
 
         {/* 项目固化记录区块 */}

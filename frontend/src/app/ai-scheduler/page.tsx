@@ -6,11 +6,13 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Bot, Check, X, Clock, HelpCircle, Activity, User, Save, RefreshCw } from 'lucide-react';
+import { Bot, Check, X, Clock, HelpCircle, Activity, User, Save, RefreshCw, Zap } from 'lucide-react';
 import axios from 'axios';
 import { toast } from 'sonner';
 import { siteConfig } from '@/config/site';
 import Link from 'next/link';
+import { format } from 'date-fns';
+import type { GlobalChangeLog } from '@/store/projectStore';
 
 const API_URL = '/api';
 
@@ -33,23 +35,23 @@ interface HistoryItem {
 }
 
 export default function SchedulerPage() {
-  const [actions, setActions] = useState<any[]>([]);
+  const [changeLogs, setChangeLogs] = useState<GlobalChangeLog[]>([]);
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
-  const [loadingActions, setLoadingActions] = useState(true);
+  const [loadingChangeLogs, setLoadingChangeLogs] = useState(true);
   const [loadingHistory, setLoadingHistory] = useState(true);
   
   // Lightbox state
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
 
-  const fetchActions = async () => {
+  const fetchChangeLogs = async () => {
     try {
-      setLoadingActions(true);
-      const res = await axios.get(`${API_URL}/ai_actions/pending`);
-      setActions(res.data);
+      setLoadingChangeLogs(true);
+      const res = await axios.get(`${API_URL}/change-logs?limit=100`);
+      setChangeLogs(res.data);
     } catch (error) {
-      toast.error("获取待办动作失败");
+      toast.error("获取干预动作失败");
     } finally {
-      setLoadingActions(false);
+      setLoadingChangeLogs(false);
     }
   };
 
@@ -66,29 +68,9 @@ export default function SchedulerPage() {
   };
 
   useEffect(() => {
-    fetchActions();
+    fetchChangeLogs();
     fetchHistory();
   }, []);
-
-  const handleApprove = async (id: string, payload: any) => {
-    try {
-      await axios.post(`${API_URL}/ai_actions/${id}/approve`, payload);
-      toast.success("审批通过，指令已执行！");
-      fetchActions();
-    } catch (error) {
-      toast.error("审批失败");
-    }
-  };
-
-  const handleReject = async (id: string) => {
-    try {
-      await axios.delete(`${API_URL}/ai_actions/${id}`);
-      toast.success("已驳回该建议动作");
-      fetchActions();
-    } catch (error) {
-      toast.error("操作失败");
-    }
-  };
 
   return (
     <div className="container mx-auto p-6 md:p-8 space-y-8 max-w-7xl">
@@ -131,34 +113,38 @@ export default function SchedulerPage() {
           </div>
         </div>
 
-        {/* 右侧：调度决策中枢 */}
+        {/* 右侧：干预动作（统一变更记录流） */}
         <div className="space-y-6">
-          <h2 className="text-xl font-semibold flex items-center gap-2">
-            <Bot className="w-5 h-5 text-indigo-500" />
-            调度干预动作
-          </h2>
-          
-          {loadingActions ? (
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-semibold flex items-center gap-2">
+              <Zap className="w-5 h-5 text-indigo-500" />
+              干预动作
+            </h2>
+            <Button variant="ghost" size="sm" onClick={fetchChangeLogs} disabled={loadingChangeLogs}>
+              <RefreshCw className={`w-4 h-4 mr-2 ${loadingChangeLogs ? 'animate-spin' : ''}`} />
+              刷新
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground -mt-4">
+            统一汇总所有项目的字段编辑、标签、状态、文件、PDF 导入等留痕记录
+          </p>
+
+          {loadingChangeLogs ? (
             <div className="flex justify-center py-20">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
             </div>
-          ) : actions.length === 0 ? (
+          ) : changeLogs.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-24 text-center rounded-2xl border-2 border-dashed bg-muted/20">
                <div className="h-16 w-16 rounded-full bg-emerald-500/10 flex items-center justify-center mb-4">
                  <Check className="h-8 w-8 text-emerald-500" />
                </div>
-               <h3 className="text-lg font-semibold">当前暂无待办干预</h3>
-               <p className="text-sm text-muted-foreground mt-1 max-w-xs">业务运转良好，暂无需介入的调度任务</p>
+               <h3 className="text-lg font-semibold">暂无干预动作</h3>
+               <p className="text-sm text-muted-foreground mt-1 max-w-xs">目前没有任何项目被修改过，系统保持静默</p>
             </div>
           ) : (
-            <div className="flex flex-col gap-6">
-              {actions.map((action) => (
-                <ActionCard 
-                  key={action.id} 
-                  action={action} 
-                  onApprove={(payload: any) => handleApprove(action.id, payload)}
-                  onReject={() => handleReject(action.id)}
-                />
+            <div className="relative border-l-2 border-muted pl-6 space-y-4 py-2">
+              {changeLogs.map((log) => (
+                <GlobalChangeLogItem key={log.id} log={log} />
               ))}
             </div>
           )}
@@ -308,59 +294,48 @@ function HistoryFeedItem({ item, onImageClick }: { item: HistoryItem, onImageCli
   );
 }
 
-function ActionCard({ action, onApprove, onReject }: any) {
-  const [payload, setPayload] = useState(action.suggested_payload || {});
+const CHANGELOG_STYLE: Record<string, { label: string; dot: string; bg: string; text: string }> = {
+  field_edit:    { label: '字段编辑', dot: 'bg-sky-500',      bg: 'bg-sky-500/10',     text: 'text-sky-600' },
+  date_edit:     { label: '开始时间', dot: 'bg-blue-500',     bg: 'bg-blue-500/10',    text: 'text-blue-600' },
+  date_delay:    { label: '结束时间', dot: 'bg-orange-500',   bg: 'bg-orange-500/10',  text: 'text-orange-600' },
+  tag_add:       { label: '新增标签', dot: 'bg-emerald-500',  bg: 'bg-emerald-500/10', text: 'text-emerald-600' },
+  tag_remove:    { label: '删除标签', dot: 'bg-rose-500',     bg: 'bg-rose-500/10',    text: 'text-rose-600' },
+  status_change: { label: '状态变更', dot: 'bg-purple-500',   bg: 'bg-purple-500/10',  text: 'text-purple-600' },
+  file_upload:   { label: '上传文件', dot: 'bg-teal-500',     bg: 'bg-teal-500/10',    text: 'text-teal-600' },
+  file_delete:   { label: '删除文件', dot: 'bg-red-500',      bg: 'bg-red-500/10',     text: 'text-red-600' },
+  pdf_import:    { label: 'PDF 导入', dot: 'bg-indigo-500',   bg: 'bg-indigo-500/10',  text: 'text-indigo-600' },
+  portal_edit:   { label: '门户修改', dot: 'bg-cyan-500',     bg: 'bg-cyan-500/10',    text: 'text-cyan-600' },
+};
 
-  const handlePayloadChange = (key: string, value: string) => {
-    setPayload({ ...payload, [key]: value });
-  };
-
+function GlobalChangeLogItem({ log }: { log: GlobalChangeLog }) {
+  const style = CHANGELOG_STYLE[log.action_type] || CHANGELOG_STYLE.field_edit;
+  const time = format(new Date(log.created_at), 'yyyy-MM-dd HH:mm');
   return (
-    <Card className="border-indigo-500/20 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden">
-      <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/5 rounded-bl-full -z-10" />
-      <CardHeader className="pb-4">
-        <div className="flex justify-between items-start mb-2">
-          <Badge variant="secondary" className="bg-indigo-500/10 text-indigo-600 dark:text-indigo-400">
-             {action.action_type}
-          </Badge>
-          <div className="flex items-center text-xs text-muted-foreground">
-             <Clock className="mr-1 h-3 w-3" /> 刚刚
+    <div className="relative">
+      <div className={`absolute -left-[33px] top-2 h-4 w-4 rounded-full ${style.dot} border-2 border-background shadow-sm`} />
+      <div className="bg-card border rounded-lg px-4 py-3 hover:shadow-sm transition-shadow">
+        <div className="flex items-start justify-between gap-3 mb-1">
+          <div className="flex items-center gap-2 min-w-0">
+            <Badge variant="secondary" className={`${style.bg} ${style.text} border-0 shrink-0`}>
+              {style.label}
+            </Badge>
+            <Link
+              href={`/project/${log.project_id}`}
+              className="text-sm font-medium text-primary hover:underline truncate"
+              title={log.project_title}
+            >
+              {log.project_title}
+            </Link>
           </div>
+          <span className="text-xs text-muted-foreground flex items-center shrink-0">
+            <Clock className="w-3 h-3 mr-1" />
+            {time}
+          </span>
         </div>
-        <CardTitle className="text-lg">
-          {action.action_type === '新增里程碑' && '建议为本期项目追加新里程碑'}
-          {action.action_type === '企微催收' && '建议向项目组发送企微催办卡片'}
-        </CardTitle>
-        <CardDescription className="flex items-center gap-1 mt-1">
-          <HelpCircle className="h-3 w-3" />
-          系统检测到目前进度异常，建议采取辅助措施。
-        </CardDescription>
-      </CardHeader>
-      
-      <CardContent className="space-y-4">
-        <div className="bg-secondary/30 p-4 rounded-lg space-y-3 border">
-           <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">指令参数预设 (可自由修改)</h4>
-           {Object.entries(payload).map(([key, value]: [string, any]) => (
-             <div key={key} className="space-y-1.5">
-               <Label className="text-xs font-medium text-foreground/70 capitalize">{key}</Label>
-               <Input 
-                 value={value} 
-                 onChange={(e) => handlePayloadChange(key, e.target.value)} 
-                 className="h-8 bg-background border-muted"
-               />
-             </div>
-           ))}
+        <div className="text-sm leading-relaxed pl-1 break-words">
+          {log.summary}
         </div>
-      </CardContent>
-      
-      <CardFooter className="flex gap-3 pt-2 pb-5 px-6">
-        <Button variant="outline" className="flex-1 border-destructive/20 text-destructive hover:bg-destructive hover:text-white" onClick={onReject}>
-          <X className="mr-2 h-4 w-4" /> 忽略/驳回
-        </Button>
-        <Button className="flex-1 bg-gradient-to-r from-indigo-500 to-blue-600 hover:from-indigo-600 hover:to-blue-700 text-white shadow-md shadow-indigo-500/20" onClick={() => onApprove(payload)}>
-          <Check className="mr-2 h-4 w-4" /> 批准下发
-        </Button>
-      </CardFooter>
-    </Card>
+      </div>
+    </div>
   );
 }

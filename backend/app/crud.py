@@ -47,10 +47,10 @@ def get_project_by_title(db: Session, title: str):
     return db.query(models.Project).filter(models.Project.title == title).first()
 
 def create_project(db: Session, project: schemas.ProjectCreate):
+    # 新策略：项目周期改由 planned_start_date / planned_end_date 字段承载，
+    # 二者都不自动填充，允许为空（前端显示"未设置"并提示手动维护）。
+    # 老的 end_date 字段保留用于兼容历史数据与旧的延期流程，不再自动塞默认值。
     project_data = project.model_dump()
-    # 如果未提供 end_date，自动设置为创建时间 + 90天（约3个月）
-    if not project_data.get('end_date'):
-        project_data['end_date'] = datetime.utcnow() + timedelta(days=90)
     db_project = models.Project(**project_data)
     sync_status_from_tags(db_project)
     db.add(db_project)
@@ -376,3 +376,64 @@ def get_delay_history(db: Session, project_id: UUID) -> List[models.ProjectDelay
     return db.query(models.ProjectDelayHistory).filter(
         models.ProjectDelayHistory.project_id == project_id
     ).order_by(models.ProjectDelayHistory.created_at.desc()).all()
+
+
+# ---- 项目变更留痕 CRUD ----
+
+def _to_str(v) -> Optional[str]:
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v.strftime('%Y-%m-%d')
+    if isinstance(v, (list, tuple)):
+        return '、'.join(str(x) for x in v)
+    return str(v)
+
+def log_change(
+    db: Session,
+    project_id: UUID,
+    action_type: str,
+    summary: str,
+    field_name: Optional[str] = None,
+    old_value=None,
+    new_value=None,
+    details=None,
+    commit: bool = True,
+) -> models.ProjectChangeLog:
+    """
+    统一写入"干预动作"日志。summary 是前端直接展示的一行文字。
+    调用方通常已经在一次事务里做了业务改动，这里默认 commit=True 保证日志落地；
+    如需和业务一起原子提交可传 commit=False。
+    """
+    rec = models.ProjectChangeLog(
+        project_id=project_id,
+        action_type=action_type,
+        field_name=field_name,
+        old_value=_to_str(old_value),
+        new_value=_to_str(new_value),
+        summary=summary,
+        details=details,
+    )
+    db.add(rec)
+    if commit:
+        db.commit()
+        db.refresh(rec)
+    return rec
+
+
+def get_project_change_logs(db: Session, project_id: UUID, limit: int = 200) -> List[models.ProjectChangeLog]:
+    return db.query(models.ProjectChangeLog).filter(
+        models.ProjectChangeLog.project_id == project_id
+    ).order_by(models.ProjectChangeLog.created_at.desc()).limit(limit).all()
+
+
+def get_all_change_logs(db: Session, limit: int = 100):
+    """全站变更日志，连 join 项目标题一起返回。"""
+    return db.query(
+        models.ProjectChangeLog,
+        models.Project.title.label("project_title"),
+    ).join(
+        models.Project, models.ProjectChangeLog.project_id == models.Project.id
+    ).order_by(
+        models.ProjectChangeLog.created_at.desc()
+    ).limit(limit).all()

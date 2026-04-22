@@ -10,3 +10,5 @@ openpyxl
 python-dotenv
 PyJWT
 pandas
+pdfplumber
+python-dateutil

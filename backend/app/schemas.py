@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import List, Optional, Any
 from uuid import UUID
 from datetime import datetime
@@ -43,7 +43,7 @@ class MilestoneResponse(MilestoneBase):
 
 class ProjectBase(BaseModel):
     title: str
-    project_code: Optional[str] = None  # 项目编号，如 JGCX-2026-014
+    project_code: Optional[str] = None  # 项目编号
     department: Optional[str] = None
     leader: Optional[str] = None
     participants: List[str] = []
@@ -51,6 +51,37 @@ class ProjectBase(BaseModel):
     status: ProjectStatus = ProjectStatus.in_progress
     end_date: Optional[datetime] = None  # 结项时间
     delay_reason: Optional[str] = None  # 延期原因
+    # PDF 导入字段
+    proposer: Optional[str] = None
+    post_delivery_person: Optional[str] = None
+    improvement_site: List[str] = []
+    owning_company: List[str] = []
+    improvement_purpose: List[str] = []
+    improvement_method: List[str] = []
+    needs_evaluation: Optional[str] = None
+    implementation_period: Optional[int] = None
+    planned_start_date: Optional[datetime] = None
+    planned_end_date: Optional[datetime] = None
+    budget: Optional[float] = None
+    budget_text: Optional[str] = None
+    expected_revenue: Optional[float] = None
+    expected_revenue_text: Optional[str] = None
+    is_one_time_investment: Optional[bool] = None
+    is_one_time_revenue: Optional[bool] = None
+    quantitative_goal: Optional[str] = None
+    current_problem: Optional[str] = None
+    technical_solution: Optional[str] = None
+
+    # 数据库中老数据这些列可能为 NULL，统一在反序列化前转为空列表，避免 500
+    @field_validator(
+        'participants', 'tags',
+        'improvement_site', 'owning_company',
+        'improvement_purpose', 'improvement_method',
+        mode='before',
+    )
+    @classmethod
+    def _none_to_empty_list(cls, v):
+        return [] if v is None else v
 
 class ProjectCreate(ProjectBase):
     pass
@@ -62,8 +93,28 @@ class ProjectUpdate(BaseModel):
     participants: Optional[List[str]] = None
     tags: Optional[List[str]] = None
     status: Optional[ProjectStatus] = None
-    end_date: Optional[datetime] = None   # 结项时间
-    delay_reason: Optional[str] = None    # 延期原因（修改end_date时必填）
+    end_date: Optional[datetime] = None
+    delay_reason: Optional[str] = None
+    # PDF 导入字段
+    proposer: Optional[str] = None
+    post_delivery_person: Optional[str] = None
+    improvement_site: Optional[List[str]] = None
+    owning_company: Optional[List[str]] = None
+    improvement_purpose: Optional[List[str]] = None
+    improvement_method: Optional[List[str]] = None
+    needs_evaluation: Optional[str] = None
+    implementation_period: Optional[int] = None
+    planned_start_date: Optional[datetime] = None
+    planned_end_date: Optional[datetime] = None
+    budget: Optional[float] = None
+    budget_text: Optional[str] = None
+    expected_revenue: Optional[float] = None
+    expected_revenue_text: Optional[str] = None
+    is_one_time_investment: Optional[bool] = None
+    is_one_time_revenue: Optional[bool] = None
+    quantitative_goal: Optional[str] = None
+    current_problem: Optional[str] = None
+    technical_solution: Optional[str] = None
 
 class ProjectResponse(ProjectBase):
     id: UUID
@@ -189,3 +240,29 @@ class ProjectDelayHistoryResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ---- 项目变更记录（干预动作） Schema ----
+
+class ProjectChangeLogResponse(BaseModel):
+    id: UUID
+    project_id: UUID
+    created_at: datetime
+    action_type: str
+    field_name: Optional[str] = None
+    old_value: Optional[str] = None
+    new_value: Optional[str] = None
+    summary: str
+    details: Optional[Any] = None
+
+    class Config:
+        from_attributes = True
+
+
+class GlobalChangeLogResponse(ProjectChangeLogResponse):
+    """全站干预动作流：附带项目标题，方便前端列表直接展示"""
+    project_title: str
+
+
+class PortalDeliveryPersonUpdate(BaseModel):
+    post_delivery_person: str
