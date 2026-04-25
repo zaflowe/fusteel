@@ -1,8 +1,12 @@
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import or_, func
+from sqlalchemy import or_, and_, func
 from uuid import UUID
 from datetime import datetime, timedelta
+from typing import Optional
 from . import models, schemas
+
+# "最近固化"摘要的内容截断长度（单位：字符），超过则追加省略号
+LATEST_UPDATE_SUMMARY_LIMIT = 30
 
 def sync_status_from_tags(project: models.Project):
     """根据最新标签列表，自动同步状态并移除冲突标签"""
@@ -72,37 +76,302 @@ def update_project(db: Session, project_id: UUID, updates: schemas.ProjectUpdate
     db.refresh(db_project)
     return db_project
 
-def search_projects(db: Session, keyword: str = "", tags: list[str] = None):
-    # 先查询所有项目
+def _attach_latest_update_info(db: Session, projects: list[models.Project]):
+    """
+    给一批 Project 对象批量挂载三个"虚拟"属性（SQLAlchemy 对象可直接赋值，
+    Pydantic 的 from_attributes 会把它们读到 ProjectResponse 里）：
+      - latest_update_at
+      - latest_update_summary
+      - latest_update_reporter
+
+    用一次子查询 + 一次 join 拿每个项目最近的 ProjectUpdate，避免 N+1。
+    """
+    if not projects:
+        return projects
+
+    project_ids = [p.id for p in projects]
+
+    latest_subq = (
+        db.query(
+            models.ProjectUpdate.project_id.label('pid'),
+            func.max(models.ProjectUpdate.created_at).label('latest_at'),
+        )
+        .filter(models.ProjectUpdate.project_id.in_(project_ids))
+        .group_by(models.ProjectUpdate.project_id)
+        .subquery()
+    )
+
+    latest_rows = (
+        db.query(models.ProjectUpdate)
+        .join(
+            latest_subq,
+            and_(
+                models.ProjectUpdate.project_id == latest_subq.c.pid,
+                models.ProjectUpdate.created_at == latest_subq.c.latest_at,
+            ),
+        )
+        .all()
+    )
+
+    by_pid = {r.project_id: r for r in latest_rows}
+
+    for p in projects:
+        u = by_pid.get(p.id)
+        if u:
+            p.latest_update_at = u.created_at
+            content = (u.content or '').strip()
+            if len(content) > LATEST_UPDATE_SUMMARY_LIMIT:
+                content = content[:LATEST_UPDATE_SUMMARY_LIMIT] + '…'
+            p.latest_update_summary = content
+            p.latest_update_reporter = u.reporter_name
+        else:
+            p.latest_update_at = None
+            p.latest_update_summary = None
+            p.latest_update_reporter = None
+
+    return projects
+
+
+def _sort_projects(projects: list[models.Project], sort: str) -> list[models.Project]:
+    """
+    按照 sort 参数对项目列表做内存排序。
+    - latest_update_desc（默认）：最近有汇报的排前，从未汇报的兜底在末尾
+    - latest_update_asc：从未汇报的排最前（僵尸优先），然后有汇报的按旧→新
+    - created_desc：立项时间新→旧
+    - created_asc ：立项时间旧→新
+    """
+    if sort == 'latest_update_asc':
+        # 从未汇报的放最前（僵尸项目优先露出）
+        return sorted(
+            projects,
+            key=lambda p: (
+                1 if p.latest_update_at else 0,            # 0: 从未汇报 → 排前
+                p.latest_update_at.timestamp() if p.latest_update_at else 0,
+            ),
+        )
+    if sort == 'created_desc':
+        return sorted(projects, key=lambda p: p.created_at or datetime.min, reverse=True)
+    if sort == 'created_asc':
+        return sorted(projects, key=lambda p: p.created_at or datetime.min)
+
+    # 默认 latest_update_desc：最近汇报的在前，从未汇报的排最后
+    return sorted(
+        projects,
+        key=lambda p: (
+            0 if p.latest_update_at else 1,                # 0: 有汇报 → 排前
+            -(p.latest_update_at.timestamp()) if p.latest_update_at else 0,
+        ),
+    )
+
+
+def search_projects(
+    db: Session,
+    keyword: str = "",
+    tags: list[str] = None,
+    sort: str = 'latest_update_desc',
+    priority: str = "",
+):
+    """
+    查询项目列表并挂载"最近固化"摘要。
+    priority 取值：
+      ""     不过滤
+      "A"/"B"/"C"  仅返回该等级
+      "unset"     仅返回未定级（priority IS NULL）
+    保留了 Python 层过滤（兼容老逻辑与复杂标签匹配），之后再做 SQL 化重构。
+    """
     query = db.query(models.Project)
     results = query.all()
-    
+
     # 关键词搜索：使用 Python 内存过滤
     if keyword:
-        # 数据清洗：剥离 # 号，转小写
         search_term = keyword.replace("#", "").strip().lower()
-        
+
         filtered = []
         for project in results:
-            # 匹配标题（转小写）
             title_match = search_term in (project.title or "").lower()
-            
-            # 匹配标签（转小写，剥离标签中的 # 号）
             project_tags = [t.replace("#", "").lower() for t in (project.tags or [])]
             tag_match = any(search_term in tag for tag in project_tags)
-            
             if title_match or tag_match:
                 filtered.append(project)
-        
+
         results = filtered
-    
+
     # 标签筛选（额外的精确标签过滤）
     if tags:
         for tag in tags:
             clean_tag = tag.replace("#", "").strip().lower()
-            results = [p for p in results if any(clean_tag in t.replace("#", "").lower() for t in (p.tags or []))]
-    
-    return results
+            results = [
+                p for p in results
+                if any(clean_tag in t.replace("#", "").lower() for t in (p.tags or []))
+            ]
+
+    # ABC 优先级过滤
+    if priority:
+        p_norm = priority.strip().upper()
+        if p_norm == "UNSET":
+            results = [p for p in results if p.priority is None]
+        elif p_norm in ("A", "B", "C"):
+            results = [p for p in results if p.priority and p.priority.value == p_norm]
+
+    # 挂载最近固化信息 & 排序
+    _attach_latest_update_info(db, results)
+    return _sort_projects(results, sort)
+
+
+def set_project_priority(
+    db: Session,
+    project_id: UUID,
+    priority: models.ProjectPriority,
+    reason: str,
+):
+    """
+    手动定级 / 升降级。调用方（main.py）负责在返回后写 ProjectChangeLog，
+    这里只负责落字段。
+    返回 (project, old_priority_value) 供调用方生成变更记录摘要。
+    """
+    project = get_project(db, project_id)
+    if not project:
+        return None, None
+
+    old_value = project.priority.value if project.priority else None
+
+    project.priority = priority
+    project.priority_reason = reason
+    project.priority_set_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(project)
+    return project, old_value
+
+
+# ---- ABC 自动打分引擎 ----
+
+# 核电关键词：命中任一 → 直接 A 类（制度红线）
+_NUCLEAR_KEYWORDS = ("核电", "核能", "反应堆", "核岛")
+
+def _score_budget(budget_wan: Optional[float]) -> tuple[int, str, str]:
+    """投资额维度：0-3 分。>= 50 万走硬指标，此处不兜底到 A。"""
+    if budget_wan is None:
+        return 0, "未填写", "无数据默认给 0 分，请人工确认"
+    b = float(budget_wan)
+    if b < 5:   return 0, f"{b:g} 万", "< 5 万"
+    if b < 10:  return 1, f"{b:g} 万", "5–10 万"
+    if b < 30:  return 2, f"{b:g} 万", "10–30 万"
+    if b < 50:  return 3, f"{b:g} 万", "30–50 万"
+    # 50+ 理论上已被硬指标接管
+    return 3, f"{b:g} 万", "≥ 50 万（已命中硬指标）"
+
+
+def _score_period(months: Optional[int]) -> tuple[int, str, str]:
+    """实施周期维度：0-3 分（单位月）"""
+    if months is None:
+        return 1, "未填写", "无数据默认给 1 分（中等），请人工确认"
+    m = int(months)
+    if m <= 1:   return 0, f"{m} 个月", "≤ 1 个月"
+    if m <= 3:   return 1, f"{m} 个月", "1–3 个月"
+    if m <= 6:   return 2, f"{m} 个月", "3–6 个月"
+    return 3, f"{m} 个月", "6 个月以上"
+
+
+def _score_dept_span(sites: Optional[list]) -> tuple[int, str, str]:
+    """协同部门数维度：用 improvement_site 列表长度代理。>= 3 是硬 A。"""
+    count = len(sites or [])
+    if count == 0:
+        return 0, "未填写", "无改造场地信息，按 1 处理"
+    if count == 1:   return 0, "1 个场地", "单部门项目"
+    if count == 2:   return 1, "2 个场地", "2 个部门协同"
+    if count == 3:   return 2, "3 个场地", "3 个部门协同（接近硬指标阈值）"
+    return 3, f"{count} 个场地", "≥ 4 个部门协同"
+
+
+def _score_innovation(project: models.Project) -> tuple[int, str, str, bool]:
+    """
+    创新程度维度：0-3 分。
+    这一维没有结构化字段，用规则近似 + 标记 manual=True 提醒人工确认。
+    """
+    tags = [t.replace("#", "") for t in (project.tags or [])]
+    methods = project.improvement_method or []
+    purposes = project.improvement_purpose or []
+
+    # 先看标签里的强信号
+    if any(k in t for t in tags for k in ("自主创新", "首创", "集团首台", "首台套")):
+        return 3, "/".join(tags) or "标签命中", "标签含首台套/自主创新", True
+    if "技术改造" in methods and "工艺改善" in purposes:
+        return 2, "技术改造+工艺改善", "方法+目的组合，引进新方法", True
+    if "技术改造" in methods:
+        return 1, "技术改造", "常规技改，改善工艺", True
+    return 0, "/".join(methods) or "备件/小改", "备件更换 / 小改小革", True
+
+
+def auto_score_project(project: models.Project) -> dict:
+    """
+    基于项目当前字段按《ABC 项目分类执行建议.md》打分。
+    4 个维度（投资额 / 实施周期 / 协同部门数 / 创新程度）各 0-3 分，总分上限 12。
+    「失败冲击」因缺乏结构化字段，本版本不纳入自动打分。
+    不落库，结果仅供参考。
+    """
+    tags = [t.replace("#", "") for t in (project.tags or [])]
+    title = project.title or ""
+
+    # ---- 硬指标判定：命中任一条 → 直接 A ----
+    hard_hit: Optional[str] = None
+
+    # 战略性项目（用户约定：标签含「战略性项目」/「战略」= 集团意志 = A）
+    if any(("战略性项目" in t) or (t == "战略") or (t.startswith("战略")) for t in tags):
+        hard_hit = "标签含「战略性项目」（集团战略意志）"
+    # 核电类
+    elif any(k in title for k in _NUCLEAR_KEYWORDS) or any(k in t for t in tags for k in _NUCLEAR_KEYWORDS):
+        hard_hit = "涉及核电/核能（制度红线）"
+    # 投资 ≥ 50 万
+    elif project.budget is not None and float(project.budget) >= 50:
+        hard_hit = f"投资 {project.budget:g} 万 ≥ 50 万"
+    # 跨 3+ 部门（改造场地 ≥ 3）
+    elif len(project.improvement_site or []) >= 3:
+        hard_hit = f"协同 {len(project.improvement_site)} 个场地 ≥ 3（跨部门）"
+    # 专家评审 / 第一类 / 领导点名（标签约定）
+    elif any(k in t for t in tags for k in ("专家评审", "第一类", "总办关注", "集团关注")):
+        hard_hit = "标签命中硬指标（专家评审/领导点名）"
+
+    # ---- 打分维度 ----
+    s1, v1, r1 = _score_budget(project.budget)
+    s2, v2, r2 = _score_period(project.implementation_period)
+    s3, v3, r3 = _score_dept_span(project.improvement_site)
+    s4, v4, r4, m4 = _score_innovation(project)
+
+    breakdown = [
+        {"dim": "投资额",       "value": v1, "score": s1, "rationale": r1, "manual": False},
+        {"dim": "实施周期",     "value": v2, "score": s2, "rationale": r2, "manual": False},
+        {"dim": "协同部门数",   "value": v3, "score": s3, "rationale": r3, "manual": False},
+        {"dim": "创新程度",     "value": v4, "score": s4, "rationale": r4, "manual": m4},
+    ]
+    total = s1 + s2 + s3 + s4
+
+    # ---- 最终等级（满分 12，按比例对应原 5 维 15 分的 10/5/4 阈值） ----
+    if hard_hit:
+        suggested = models.ProjectPriority.A
+    elif total >= 8:
+        suggested = models.ProjectPriority.A
+    elif total >= 4:
+        suggested = models.ProjectPriority.B
+    else:
+        suggested = models.ProjectPriority.C
+
+    # 把打分结果"缓存"到项目字段（priority_score），不改变 priority 本身
+    project.priority_score = total
+
+    note = None
+    if any(d["manual"] for d in breakdown):
+        note = "「创新程度」维度缺少结构化字段，建议人工确认。"
+
+    return {
+        "project_id": project.id,
+        "project_title": project.title,
+        "suggested_priority": suggested,
+        "total_score": total,
+        "hard_hit": hard_hit,
+        "breakdown": breakdown,
+        "note": note,
+    }
 
 def get_project(db: Session, project_id: UUID):
     return db.query(models.Project).filter(models.Project.id == project_id).first()

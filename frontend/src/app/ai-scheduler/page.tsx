@@ -305,6 +305,7 @@ const CHANGELOG_STYLE: Record<string, { label: string; dot: string; bg: string; 
   file_delete:   { label: '删除文件', dot: 'bg-red-500',      bg: 'bg-red-500/10',     text: 'text-red-600' },
   pdf_import:    { label: 'PDF 导入', dot: 'bg-indigo-500',   bg: 'bg-indigo-500/10',  text: 'text-indigo-600' },
   portal_edit:   { label: '门户修改', dot: 'bg-cyan-500',     bg: 'bg-cyan-500/10',    text: 'text-cyan-600' },
+  priority_change: { label: 'ABC 定级', dot: 'bg-fuchsia-500', bg: 'bg-fuchsia-500/10', text: 'text-fuchsia-600' },
 };
 
 function GlobalChangeLogItem({ log }: { log: GlobalChangeLog }) {

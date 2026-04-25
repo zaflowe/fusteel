@@ -29,6 +29,18 @@ class ActionStatus(str, enum.Enum):
     approved = "已批准"
     rejected = "已驳回"
 
+class ProjectPriority(str, enum.Enum):
+    """
+    ABC 优先级分级。承载"精力分诊"逻辑：
+      A 类：核心项目，系统每周盯、异常立即弹窗
+      B 类：重点项目，每两周节奏，异常升级
+      C 类：一般项目，每月扫一次，出问题再处理
+    详见《ABC 项目分类执行建议.md》。
+    """
+    A = "A"
+    B = "B"
+    C = "C"
+
 class Project(Base):
     __tablename__ = "projects"
 
@@ -64,6 +76,12 @@ class Project(Base):
     quantitative_goal = Column(Text, nullable=True, comment="定量目标具体描述/实施效益分析")
     current_problem = Column(Text, nullable=True, comment="目前存在的问题（项目背景）")
     technical_solution = Column(Text, nullable=True, comment="解决的技术指标及主要方案")
+
+    # ── ABC 优先级分级 ──────────────────────────────────────
+    priority = Column(SQLEnum(ProjectPriority), nullable=True, index=True, comment="ABC 级别（A/B/C），NULL 表示未定级")
+    priority_score = Column(Integer, nullable=True, comment="最近一次自动打分总分（0-12），仅作参考")
+    priority_reason = Column(String, nullable=True, comment="最近一次定级理由（硬指标/人工原因）")
+    priority_set_at = Column(DateTime, nullable=True, comment="最近一次定级时间")
 
     files = relationship("ProjectFile", back_populates="project", cascade="all, delete-orphan")
     milestones = relationship("Milestone", back_populates="project", cascade="all, delete-orphan", order_by="Milestone.created_at")

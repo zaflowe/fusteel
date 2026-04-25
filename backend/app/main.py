@@ -63,6 +63,11 @@ def _migrate_add_columns():
         ("current_problem",        "TEXT"),
         ("technical_solution",     "TEXT"),
         ("planned_end_date",       "DATETIME"),
+        # ABC 优先级分级（v2.0 引入）
+        ("priority",               "VARCHAR"),
+        ("priority_score",         "INTEGER"),
+        ("priority_reason",        "VARCHAR"),
+        ("priority_set_at",        "DATETIME"),
     ]
     for col_name, col_type in new_cols:
         if col_name not in existing:
@@ -475,15 +480,164 @@ def create_project(project: schemas.ProjectCreate, db: Session = Depends(get_db)
     return crud.create_project(db, project)
 
 @app.get("/api/projects", response_model=List[schemas.ProjectResponse])
-def read_projects(keyword: str = "", tags: str = "", db: Session = Depends(get_db)):
+def read_projects(
+    keyword: str = "",
+    tags: str = "",
+    sort: str = "latest_update_desc",
+    priority: str = "",
+    db: Session = Depends(get_db),
+):
+    """
+    sort 取值：
+      latest_update_desc（默认）- 最近有固化的在前
+      latest_update_asc          - 最久没固化/从未固化的在前（用于找僵尸项目）
+      created_desc               - 立项时间新→旧
+      created_asc                - 立项时间旧→新
+
+    priority 取值：
+      ""（默认）  不按等级过滤
+      A / B / C   仅返回该等级
+      unset       仅返回未定级项目
+    """
     tags_list = tags.split(",") if tags else []
-    return crud.search_projects(db, keyword=keyword, tags=tags_list)
+    return crud.search_projects(
+        db,
+        keyword=keyword,
+        tags=tags_list,
+        sort=sort,
+        priority=priority,
+    )
+
+
+# ---- ABC 优先级 ----
+# 注意：下面这些 "/api/projects/priority/..." 静态路径必须注册在
+# "/api/projects/{id}" 之前，否则 FastAPI 会把 "priority" 当 UUID 解析。
+
+@app.get("/api/projects/priority/stats", response_model=schemas.PriorityStatsResponse)
+def get_priority_stats(db: Session = Depends(get_db)):
+    """返回首页 ABC Tab 所需的四个计数。"""
+    stats = {"A": 0, "B": 0, "C": 0, "unset": 0}
+    projects = db.query(models.Project).all()
+    for p in projects:
+        if p.priority is None:
+            stats["unset"] += 1
+        else:
+            stats[p.priority.value] = stats.get(p.priority.value, 0) + 1
+    stats["total"] = sum(stats.values())
+    return stats
+
+
+@app.get("/api/projects/priority/auto-score-csv")
+def export_auto_score_csv(db: Session = Depends(get_db)):
+    """
+    批量自动打分 → 导出 CSV 草表。
+    本接口**不落库**，只生成供评级会议使用的草稿文件。
+    列：项目编号 / 项目名称 / 部门 / 负责人 / 投资(万) / 周期(月) /
+        场地数 / 四维分 / 总分 / 硬指标 / 建议等级 / 当前等级
+    """
+    projects = db.query(models.Project).order_by(models.Project.created_at.desc()).all()
+
+    import csv
+    buf = io.StringIO()
+    # 加 BOM 让 Excel 正确识别 UTF-8 中文
+    buf.write('\ufeff')
+    writer = csv.writer(buf)
+    writer.writerow([
+        '项目编号', '项目名称', '申报单位', '负责人',
+        '投资(万)', '周期(月)', '场地数',
+        '投资分', '周期分', '部门分', '创新分',
+        '总分', '硬指标命中', '建议等级', '当前等级', '备注',
+    ])
+
+    for p in projects:
+        result = crud.auto_score_project(p)
+        bd = {d['dim']: d['score'] for d in result['breakdown']}
+        writer.writerow([
+            p.project_code or '',
+            p.title or '',
+            p.department or '',
+            p.leader or '',
+            f"{p.budget:g}" if p.budget is not None else '',
+            p.implementation_period if p.implementation_period is not None else '',
+            len(p.improvement_site or []),
+            bd.get('投资额', 0),
+            bd.get('实施周期', 0),
+            bd.get('协同部门数', 0),
+            bd.get('创新程度', 0),
+            result['total_score'],
+            result['hard_hit'] or '',
+            result['suggested_priority'].value if hasattr(result['suggested_priority'], 'value') else result['suggested_priority'],
+            p.priority.value if p.priority else '未定级',
+            result['note'] or '',
+        ])
+
+    buf.seek(0)
+    filename = f"ABC\u81ea\u52a8\u6253\u5206\u8349\u8868_{datetime.now().strftime('%Y%m%d')}.csv"
+    # 中文文件名用 RFC 5987 风格
+    headers = {
+        'Content-Disposition': f"attachment; filename*=UTF-8''{quote(filename)}"
+    }
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type='text/csv; charset=utf-8',
+        headers=headers,
+    )
+
+
+@app.get("/api/projects/{id}/auto-score", response_model=schemas.AutoScoreResponse)
+def auto_score_single(id: uuid.UUID, db: Session = Depends(get_db)):
+    """单个项目自动打分（不落库），供详情页"定级"板块显示建议。"""
+    project = crud.get_project(db, id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return crud.auto_score_project(project)
+
+
+@app.put("/api/projects/{id}/priority", response_model=schemas.ProjectResponse)
+def update_priority(
+    id: uuid.UUID,
+    payload: schemas.PriorityUpdate,
+    db: Session = Depends(get_db),
+):
+    """
+    手动定级 / 升降级。必须提供理由。会自动写一条 ProjectChangeLog。
+    """
+    project, old_value = crud.set_project_priority(
+        db, id, payload.priority, payload.reason,
+    )
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    new_value = payload.priority.value
+    if old_value == new_value:
+        # 值没变也留一条，方便追溯"为什么有人今天改了理由没改等级"
+        summary = f"ABC 等级维持 {new_value}（理由更新）"
+    else:
+        old_label = old_value or '未定级'
+        summary = f"ABC 等级 {old_label} → {new_value}（{payload.reason}）"
+
+    crud.log_change(
+        db, id,
+        action_type='priority_change',
+        field_name='priority',
+        old_value=old_value,
+        new_value=new_value,
+        summary=summary,
+        details={'reason': payload.reason},
+    )
+
+    # 详情页需要最近固化摘要
+    crud._attach_latest_update_info(db, [project])
+    return project
+
 
 @app.get("/api/projects/{id}", response_model=schemas.ProjectResponse)
 def read_project(id: uuid.UUID, db: Session = Depends(get_db)):
     project = crud.get_project(db, id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+    # 详情页也挂一下最近固化信息，保证前端类型统一
+    crud._attach_latest_update_info(db, [project])
     return project
 
 _FIELD_LABELS = {
@@ -1418,22 +1572,25 @@ def export_single_project_zip(id: uuid.UUID, db: Session = Depends(get_db)):
 
 class PortalTokenPayload:
     """门户 JWT Token 数据结构"""
-    def __init__(self, project_ids: List[str], exp: datetime, iat: datetime):
+    def __init__(self, project_ids: List[str], exp: datetime, iat: datetime, name: str = ""):
         self.project_ids = project_ids
         self.exp = exp
         self.iat = iat
+        self.name = name
 
-def create_portal_token(project_ids: List[str], expires_days: int = 7) -> str:
+def create_portal_token(project_ids: List[str], name: str = "", expires_days: int = 7) -> str:
     """
-    创建外部协同门户 JWT Token
+    创建外部协同门户 JWT Token。Token 内除了可访问的项目清单外，
+    还保存登录时输入的 name，以便后续三视图按角色筛选。
     """
     now = datetime.utcnow()
     payload = {
-        "sub": "portal",  # 主题标识
-        "project_ids": project_ids,  # 可访问的项目ID列表
-        "iat": now,  # 签发时间
-        "exp": now + timedelta(days=expires_days),  # 过期时间
-        "type": "portal"  # Token 类型
+        "sub": "portal",
+        "project_ids": project_ids,
+        "name": name,
+        "iat": now,
+        "exp": now + timedelta(days=expires_days),
+        "type": "portal"
     }
     return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
 
@@ -1451,7 +1608,8 @@ def verify_portal_token(token: str) -> PortalTokenPayload:
         return PortalTokenPayload(
             project_ids=payload.get("project_ids", []),
             exp=datetime.fromtimestamp(payload["exp"]),
-            iat=datetime.fromtimestamp(payload["iat"])
+            iat=datetime.fromtimestamp(payload["iat"]),
+            name=payload.get("name", ""),
         )
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token 已过期")
@@ -1473,56 +1631,118 @@ async def get_portal_auth(authorization: Optional[str] = Header(None)) -> Portal
     
     return verify_portal_token(token)
 
+def _match_name(field_value, name: str) -> bool:
+    """统一的姓名模糊匹配（大小写无关，前后去空格）。"""
+    if not field_value or not name:
+        return False
+    return name.strip() in str(field_value)
+
+def _classify_roles(projects: list[models.Project], name: str) -> dict:
+    """
+    给定项目列表与登录姓名，按三种角色分类出 project id 列表：
+      - leader：负责人是我
+      - participant：参与人员里有我，但我不是负责人（去重）
+      - post_delivery：交付后负责人是我
+    """
+    leader_ids: list[str] = []
+    participant_ids: list[str] = []
+    post_delivery_ids: list[str] = []
+
+    for p in projects:
+        pid = str(p.id)
+        is_leader = _match_name(p.leader, name)
+        is_participant_raw = any(_match_name(x, name) for x in (p.participants or []))
+        is_post_delivery = _match_name(p.post_delivery_person, name)
+
+        if is_leader:
+            leader_ids.append(pid)
+        # "参与的" tab 剔除已经是负责人的项目
+        if is_participant_raw and not is_leader:
+            participant_ids.append(pid)
+        if is_post_delivery:
+            post_delivery_ids.append(pid)
+
+    return {
+        "leader": leader_ids,
+        "participant": participant_ids,
+        "post_delivery": post_delivery_ids,
+    }
+
+
 @app.post("/api/portal/auth")
 def portal_login(credentials: dict, db: Session = Depends(get_db)):
     """
-    外部协同门户登录接口 - 极简模式：只输入姓名即可查看
+    外部协同门户登录接口 - 极简模式：只输入姓名即可查看。
     请求体: { "name": "姓名" }
+    返回体除 token / 全量可访问项目外，还带 roles 三分类映射，
+    供前端 Portal Dashboard 的三视图 Tab 使用。
     """
     name = credentials.get("name", "").strip()
-    
+
     if not name:
         raise HTTPException(status_code=400, detail="姓名不能为空")
-    
-    # 查找该姓名关联的项目（通过负责人或参与人员匹配）
+
     all_projects = crud.search_projects(db, keyword="", tags=[])
-    accessible_projects = []
-    
-    for project in all_projects:
-        # 匹配姓名（模糊匹配）
-        leader_match = project.leader and name in project.leader
-        participant_match = any(name in str(p) for p in (project.participants or []))
-        if leader_match or participant_match:
-            accessible_projects.append(str(project.id))
-    
-    # 生成 JWT Token
-    token = create_portal_token(accessible_projects, expires_days=7)
-    
+
+    roles = _classify_roles(all_projects, name)
+
+    # 有访问权限 = 任一角色命中
+    accessible_set: set[str] = set()
+    accessible_set.update(roles["leader"])
+    accessible_set.update(roles["participant"])
+    accessible_set.update(roles["post_delivery"])
+    accessible_projects = list(accessible_set)
+
+    token = create_portal_token(accessible_projects, name=name, expires_days=7)
+
     return {
         "token": token,
-        "expires_in": 7 * 24 * 3600,  # 7天，单位秒
+        "expires_in": 7 * 24 * 3600,
         "project_ids": accessible_projects,
-        "name": name
+        "name": name,
+        "roles": roles,
+        "counts": {
+            "leader": len(roles["leader"]),
+            "participant": len(roles["participant"]),
+            "post_delivery": len(roles["post_delivery"]),
+            "total": len(accessible_projects),
+        },
     }
 
+
 @app.get("/api/portal/projects", response_model=List[schemas.ProjectResponse])
-def get_portal_projects(auth: PortalTokenPayload = Depends(get_portal_auth), db: Session = Depends(get_db)):
+def get_portal_projects(
+    role: Optional[str] = None,
+    sort: str = "latest_update_desc",
+    auth: PortalTokenPayload = Depends(get_portal_auth),
+    db: Session = Depends(get_db),
+):
     """
-    获取当前门户用户可访问的项目列表
+    获取当前门户用户可访问的项目列表。
+    role 参数可选：leader / participant / post_delivery / all（默认 all）。
+    不带 role 时返回全部可访问项目；带 role 时按当前登录姓名动态过滤。
     """
     if not auth.project_ids:
-        return []  # 没有可访问的项目
-    
-    projects = []
+        return []
+
+    # 先把所有可访问项目捞出来
+    accessible: list[models.Project] = []
     for pid_str in auth.project_ids:
         try:
             project = crud.get_project(db, uuid.UUID(pid_str))
             if project:
-                projects.append(project)
-        except:
+                accessible.append(project)
+        except Exception:
             continue
-    
-    return projects
+
+    if role and role != 'all':
+        roles = _classify_roles(accessible, auth.name or "")
+        allowed = set(roles.get(role, []))
+        accessible = [p for p in accessible if str(p.id) in allowed]
+
+    # 挂载最近固化信息 + 统一排序
+    crud._attach_latest_update_info(db, accessible)
+    return crud._sort_projects(accessible, sort)
 
 @app.get("/api/portal/projects/{id}", response_model=schemas.ProjectResponse)
 def get_portal_project_detail(id: uuid.UUID, auth: PortalTokenPayload = Depends(get_portal_auth), db: Session = Depends(get_db)):

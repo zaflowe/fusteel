@@ -5,6 +5,11 @@ const API_URL = '/api';
 
 export type ProjectStatus = '实施中' | '已完成' | '已结项' | '暂停中';
 
+// ABC 优先级
+export type ProjectPriority = 'A' | 'B' | 'C';
+// 首页 Tab 值：包含"全部 / A / B / C / 未定级"
+export type PriorityFilter = '' | 'A' | 'B' | 'C' | 'unset';
+
 export interface ProjectFile {
   id: string;
   project_id: string;
@@ -47,7 +52,51 @@ export interface Project {
   technical_solution?: string | null;
   files: ProjectFile[];
   milestones: Milestone[];
+  // 由后端聚合写入：该项目"最近一次项目固化"的摘要（用于首页/Portal 卡片小尾巴）
+  latest_update_at?: string | null;
+  latest_update_summary?: string | null;
+  latest_update_reporter?: string | null;
+  // ABC 优先级（null = 未定级）
+  priority?: ProjectPriority | null;
+  priority_score?: number | null;
+  priority_reason?: string | null;
+  priority_set_at?: string | null;
 }
+
+// 自动打分响应（详情页"定级"板块使用）
+export interface AutoScoreDimension {
+  dim: string;
+  value: string;
+  score: number;
+  rationale: string;
+  manual: boolean;
+}
+
+export interface AutoScoreResponse {
+  project_id: string;
+  project_title: string;
+  suggested_priority: ProjectPriority;
+  total_score: number;
+  hard_hit?: string | null;
+  breakdown: AutoScoreDimension[];
+  note?: string | null;
+}
+
+// ABC 数量统计
+export interface PriorityStats {
+  A: number;
+  B: number;
+  C: number;
+  unset: number;
+  total: number;
+}
+
+// 首页排序下拉的取值：与后端 search_projects(sort=...) 保持一致
+export type ProjectSort =
+  | 'latest_update_desc'   // 最近固化 · 新→旧（默认）
+  | 'latest_update_asc'    // 最近固化 · 旧→新（找僵尸项目）
+  | 'created_desc'         // 立项时间 · 新→旧
+  | 'created_asc';         // 立项时间 · 旧→新
 
 export interface ProjectDelayHistory {
   id: string;
@@ -93,9 +142,18 @@ interface ProjectStore {
   loading: boolean;
   keyword: string;
   tagFilter: string;
-  
+  sort: ProjectSort;
+  priorityFilter: PriorityFilter;
+  priorityStats: PriorityStats;
+
   setKeyword: (keyword: string) => void;
   setTagFilter: (tag: string) => void;
+  setSort: (sort: ProjectSort) => void;
+  setPriorityFilter: (p: PriorityFilter) => void;
+  fetchPriorityStats: () => Promise<void>;
+  setProjectPriority: (id: string, priority: ProjectPriority, reason: string) => Promise<void>;
+  autoScoreProject: (id: string) => Promise<AutoScoreResponse>;
+  downloadAutoScoreCsv: () => Promise<void>;
   fetchProjects: () => Promise<void>;
   completeProject: (id: string) => Promise<void>;
   uploadExcel: (file: File) => Promise<void>;
@@ -113,30 +171,89 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   loading: false,
   keyword: '',
   tagFilter: '',
+  sort: 'latest_update_desc',
+  priorityFilter: '',
+  priorityStats: { A: 0, B: 0, C: 0, unset: 0, total: 0 },
 
   setKeyword: (keyword) => {
     set({ keyword });
     get().fetchProjects();
   },
-  
+
   setTagFilter: (tagFilter) => {
     set({ tagFilter });
     get().fetchProjects();
   },
 
+  setSort: (sort) => {
+    set({ sort });
+    get().fetchProjects();
+  },
+
+  setPriorityFilter: (priorityFilter) => {
+    set({ priorityFilter });
+    get().fetchProjects();
+  },
+
+  fetchPriorityStats: async () => {
+    try {
+      const res = await axios.get(`${API_URL}/projects/priority/stats`);
+      set({ priorityStats: res.data });
+    } catch (error) {
+      console.error('Failed to fetch priority stats', error);
+    }
+  },
+
+  setProjectPriority: async (id, priority, reason) => {
+    try {
+      await axios.put(`${API_URL}/projects/${id}/priority`, { priority, reason });
+      // 定级后刷新列表与统计（Tab 栏数字要变）
+      await get().fetchProjects();
+      await get().fetchPriorityStats();
+    } catch (error) {
+      console.error('Failed to set project priority', error);
+      throw error;
+    }
+  },
+
+  autoScoreProject: async (id) => {
+    const res = await axios.get<AutoScoreResponse>(`${API_URL}/projects/${id}/auto-score`);
+    return res.data;
+  },
+
+  downloadAutoScoreCsv: async () => {
+    try {
+      const response = await axios.get(`${API_URL}/projects/priority/auto-score-csv`, {
+        responseType: 'blob',
+      });
+      const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `ABC自动打分草表_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Failed to download auto-score CSV', error);
+      throw error;
+    }
+  },
+
   fetchProjects: async () => {
     set({ loading: true });
     try {
-      const { keyword, tagFilter } = get();
+      const { keyword, tagFilter, sort, priorityFilter } = get();
       const params = new URLSearchParams();
-      
-      // 统一将搜索词作为 keyword 参数，由后端统一处理标题和标签搜索
+
       if (keyword) {
         params.append('keyword', keyword);
       }
-      
       if (tagFilter) params.append('tags', tagFilter);
-      
+      if (sort) params.append('sort', sort);
+      if (priorityFilter) params.append('priority', priorityFilter);
+
       const res = await axios.get(`${API_URL}/projects?${params.toString()}`);
       set({ projects: res.data });
     } catch (error) {

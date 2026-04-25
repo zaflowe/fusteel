@@ -1,8 +1,8 @@
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Any
 from uuid import UUID
 from datetime import datetime
-from .models import ProjectStatus, FileType, ActionType, ActionStatus
+from .models import ProjectStatus, FileType, ActionType, ActionStatus, ProjectPriority
 
 class ProjectFileBase(BaseModel):
     file_type: FileType
@@ -71,6 +71,11 @@ class ProjectBase(BaseModel):
     quantitative_goal: Optional[str] = None
     current_problem: Optional[str] = None
     technical_solution: Optional[str] = None
+    # ABC 优先级（NULL = 未定级）
+    priority: Optional[ProjectPriority] = None
+    priority_score: Optional[int] = None
+    priority_reason: Optional[str] = None
+    priority_set_at: Optional[datetime] = None
 
     # 数据库中老数据这些列可能为 NULL，统一在反序列化前转为空列表，避免 500
     @field_validator(
@@ -122,6 +127,10 @@ class ProjectResponse(ProjectBase):
     files: List[ProjectFileResponse] = []
     milestones: List[MilestoneResponse] = []
     delay_history: List['ProjectDelayHistoryResponse'] = []
+
+    latest_update_at: Optional[datetime] = None
+    latest_update_summary: Optional[str] = None
+    latest_update_reporter: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -266,3 +275,45 @@ class GlobalChangeLogResponse(ProjectChangeLogResponse):
 
 class PortalDeliveryPersonUpdate(BaseModel):
     post_delivery_person: str
+
+
+# ---- ABC 优先级 Schema ----
+
+class PriorityUpdate(BaseModel):
+    """
+    手动定级请求体。必须填理由：既为审计留痕，也防止"随手定级"。
+    """
+    priority: ProjectPriority
+    reason: str = Field(..., min_length=2, description="定级 / 升降级理由，必填")
+
+
+class AutoScoreDimension(BaseModel):
+    """单个打分维度的结果（供前端展示打分明细）"""
+    dim: str           # 维度名：投资额/实施周期/协同部门数/创新程度
+    value: str         # 原始取值的人类可读表述，如 "20 万"
+    score: int         # 0-3
+    rationale: str     # 判分理由（解释为什么给这个分）
+    manual: bool = False  # True 表示此维度无法自动判断，建议人工确认
+
+
+class AutoScoreResponse(BaseModel):
+    """
+    自动打分建议。注意：此接口**只给建议，不落库**。
+    前端拿到后交给人工确认/微调，再调用 PUT /priority 正式定级。
+    """
+    project_id: UUID
+    project_title: str
+    suggested_priority: ProjectPriority
+    total_score: int
+    hard_hit: Optional[str] = None   # 命中硬指标时的说明，如 "投资 ≥ 50 万"
+    breakdown: List[AutoScoreDimension] = []
+    note: Optional[str] = None       # 给前端的补充提示，例如"本项目多维度需人工确认"
+
+
+class PriorityStatsResponse(BaseModel):
+    """ABC 数量统计（供首页 Tab 栏显示）"""
+    A: int = 0
+    B: int = 0
+    C: int = 0
+    unset: int = 0
+    total: int = 0

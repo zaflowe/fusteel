@@ -31,16 +31,27 @@ export default function PortalLoginPage() {
       const res = await axios.post(`${API_URL}/portal/auth`, {
         name: name.trim()
       });
-      
-      // 保存 token 到 localStorage
+
       localStorage.setItem('portal_token', res.data.token);
       localStorage.setItem('portal_project_ids', JSON.stringify(res.data.project_ids));
       localStorage.setItem('portal_user_name', res.data.name);
-      
+      // 新增：roles + counts，用于 dashboard 三视图 Tab 直接显示数量
+      if (res.data.roles) {
+        localStorage.setItem('portal_roles', JSON.stringify(res.data.roles));
+      }
+      if (res.data.counts) {
+        localStorage.setItem('portal_role_counts', JSON.stringify(res.data.counts));
+      }
+
       toast.success(`欢迎，${res.data.name}！`);
-      
-      // 跳转到协同看板
-      router.push('/portal/dashboard');
+
+      // 根据三个角色的数量自动落位到"首个有数据的 Tab"
+      const c = res.data.counts || {};
+      let defaultTab = 'leader';
+      if (!c.leader && c.participant) defaultTab = 'participant';
+      else if (!c.leader && !c.participant && c.post_delivery) defaultTab = 'post_delivery';
+
+      router.push(`/portal/dashboard?tab=${defaultTab}`);
     } catch (error: any) {
       const detail = error.response?.data?.detail;
       if (Array.isArray(detail)) {

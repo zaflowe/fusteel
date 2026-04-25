@@ -33,6 +33,8 @@ import UpdateForm from '@/components/UpdateForm';
 import UpdateTimeline from '@/components/UpdateTimeline';
 import ProjectCycleBadge from '@/components/ProjectCycleBadge';
 import FilePoolSection from '@/components/FilePoolSection';
+import PriorityBadge from '@/components/PriorityBadge';
+import PrioritySection from '@/components/PrioritySection';
 
 const API_URL = '/api';
 
@@ -292,6 +294,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div className="flex-1">
             <div className="flex items-center gap-3 flex-wrap">
+              <PriorityBadge priority={project.priority} size="lg" showLabel />
               <h1 className="text-3xl font-bold">{project.title}</h1>
               {/* 周期状态标签 - 显示在项目名称右侧 */}
               {(project.planned_end_date || project.end_date) && (
@@ -474,6 +477,11 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
               （最近变更原因：{project.delay_reason.length > 20 ? project.delay_reason.slice(0, 20) + '…' : project.delay_reason}）
             </span>
           )}
+        </div>
+
+        {/* ABC 定级板块 */}
+        <div className="mt-4">
+          <PrioritySection project={project} onSaved={fetchDetails} />
         </div>
 
         {/* 标签管理区域 */}
@@ -899,6 +907,7 @@ const CHANGELOG_STYLE: Record<string, { label: string; dot: string; bg: string; 
   file_delete:   { label: '删除文件', dot: 'bg-red-500',      bg: 'bg-red-500/10',     text: 'text-red-600' },
   pdf_import:    { label: 'PDF 导入', dot: 'bg-indigo-500',   bg: 'bg-indigo-500/10',  text: 'text-indigo-600' },
   portal_edit:   { label: '门户修改', dot: 'bg-cyan-500',     bg: 'bg-cyan-500/10',    text: 'text-cyan-600' },
+  priority_change: { label: 'ABC 定级', dot: 'bg-fuchsia-500', bg: 'bg-fuchsia-500/10', text: 'text-fuchsia-600' },
 };
 
 function ChangeLogCard({ item }: { item: ProjectChangeLog }) {
