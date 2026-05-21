@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import ProjectCycleBadge from '@/components/ProjectCycleBadge';
 import LatestUpdateLine from '@/components/LatestUpdateLine';
+import PortalDepartmentCard from '@/components/PortalDepartmentCard';
 
 const API_URL = '/api';
 
@@ -198,6 +199,7 @@ function PortalDashboardContent() {
       </header>
 
       <main className="max-w-6xl mx-auto px-4 py-6 space-y-4">
+        <PortalDepartmentCard />
         {/* 三视图 Tab 栏 */}
         <Tabs value={tab} onValueChange={(v) => setTab(v as PortalRole)}>
           <TabsList className="grid grid-cols-3 w-full max-w-xl">

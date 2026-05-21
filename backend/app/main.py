@@ -20,6 +20,8 @@ from urllib.parse import quote
 from . import models, schemas, crud
 from .database import engine, get_db
 from .pdf_parser import parse_project_pdf, fuzzy_match_project
+from .exports.department_stats import build_department_stats_xlsx
+from .constants import DEPARTMENT_GROUP_KEYS, classify_project_groups
 
 # Ensure uploads directory exists
 UPLOAD_DIR = Path(__file__).parent.parent / "uploads"
@@ -512,6 +514,126 @@ def read_projects(
 # ---- ABC 优先级 ----
 # 注意：下面这些 "/api/projects/priority/..." 静态路径必须注册在
 # "/api/projects/{id}" 之前，否则 FastAPI 会把 "priority" 当 UUID 解析。
+
+# ---- 部门统计（须在 /api/projects/{id} 之前注册静态路径） ----
+
+def _project_to_dept_list_item(p: models.Project, dimension: str) -> schemas.DepartmentProjectListItem:
+    groups = classify_project_groups(p.department, p.improvement_site, dimension=dimension)
+    st = p.status.value if p.status and hasattr(p.status, "value") else "实施中"
+    return schemas.DepartmentProjectListItem(
+        id=p.id,
+        title=p.title,
+        status=st,
+        leader=p.leader,
+        department=p.department,
+        project_code=p.project_code,
+        created_at=p.created_at,
+        end_date=p.end_date,
+        groups=groups,
+    )
+
+
+@app.get("/api/stats/departments", response_model=schemas.DepartmentStatsResponse)
+def get_department_stats(
+    dimension: str = Query("department", description="department | site"),
+    range: str = Query("all", alias="range", description="all | year | last_year | custom"),
+    year: Optional[int] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    include_completed: bool = True,
+    db: Session = Depends(get_db),
+):
+    if dimension not in ("department", "site"):
+        raise HTTPException(400, detail="dimension 须为 department 或 site")
+    if range not in ("all", "year", "last_year", "custom"):
+        raise HTTPException(400, detail="range 须为 all | year | last_year | custom")
+    data = crud.aggregate_department_stats(
+        db,
+        dimension=dimension,
+        range_mode=range,
+        year=year,
+        start=start,
+        end=end,
+        include_completed=include_completed,
+    )
+    return data
+
+
+@app.get("/api/stats/departments/projects", response_model=List[schemas.DepartmentProjectListItem])
+def get_department_group_projects(
+    group: str = Query(..., description="分组名，如 特钢厂"),
+    dimension: str = Query("department"),
+    range: str = Query("all", alias="range"),
+    year: Optional[int] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    include_completed: bool = True,
+    db: Session = Depends(get_db),
+):
+    if group not in DEPARTMENT_GROUP_KEYS:
+        raise HTTPException(400, detail=f"group 须为: {', '.join(DEPARTMENT_GROUP_KEYS)}")
+    projects = crud.list_department_group_projects(
+        db,
+        group,
+        dimension=dimension,
+        range_mode=range,
+        year=year,
+        start=start,
+        end=end,
+        include_completed=include_completed,
+    )
+    return [_project_to_dept_list_item(p, dimension) for p in projects]
+
+
+@app.get("/api/stats/departments/export.xlsx")
+def export_department_stats_xlsx(
+    dimension: str = Query("department"),
+    range: str = Query("all", alias="range"),
+    year: Optional[int] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    include_completed: bool = True,
+    db: Session = Depends(get_db),
+):
+    stats = crud.aggregate_department_stats(
+        db,
+        dimension=dimension,
+        range_mode=range,
+        year=year,
+        start=start,
+        end=end,
+        include_completed=include_completed,
+    )
+    projects_by_group = {}
+    for gk in DEPARTMENT_GROUP_KEYS:
+        plist = crud.list_department_group_projects(
+            db, gk,
+            dimension=dimension,
+            range_mode=range,
+            year=year,
+            start=start,
+            end=end,
+            include_completed=include_completed,
+        )
+        projects_by_group[gk] = [
+            {
+                "project_code": p.project_code,
+                "title": p.title,
+                "status": p.status.value if p.status else "",
+                "leader": p.leader,
+                "department": p.department,
+            }
+            for p in plist
+        ]
+    xlsx_bytes = build_department_stats_xlsx(stats, projects_by_group)
+    filename = f"部门统计_{dimension}_{range}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+    headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"}
+    return StreamingResponse(
+        iter([xlsx_bytes]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
+    )
+
 
 @app.get("/api/projects/priority/stats", response_model=schemas.PriorityStatsResponse)
 def get_priority_stats(db: Session = Depends(get_db)):
@@ -1708,6 +1830,50 @@ def portal_login(credentials: dict, db: Session = Depends(get_db)):
             "total": len(accessible_projects),
         },
     }
+
+
+@app.get("/api/portal/stats/my-department", response_model=schemas.PortalDepartmentStatsResponse)
+def portal_my_department_stats(
+    dimension: str = Query("department"),
+    range: str = Query("all", alias="range"),
+    year: Optional[int] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    include_completed: bool = True,
+    auth: PortalTokenPayload = Depends(get_portal_auth),
+    db: Session = Depends(get_db),
+):
+    """Portal 精简版：仅返回用户所属分组的统计与项目列表。"""
+    group_key = crud.infer_portal_user_group(
+        db, auth.name, auth.project_ids, dimension=dimension,
+    )
+    full = crud.aggregate_department_stats(
+        db,
+        dimension=dimension,
+        range_mode=range,
+        year=year,
+        start=start,
+        end=end,
+        include_completed=include_completed,
+        project_ids=auth.project_ids,
+    )
+    bucket = next((g for g in full["groups"] if g["key"] == group_key), {"total": 0, "byStatus": {}, "byYear": {}})
+    projects = crud.list_department_group_projects(
+        db,
+        group_key,
+        dimension=dimension,
+        range_mode=range,
+        year=year,
+        start=start,
+        end=end,
+        include_completed=include_completed,
+        project_ids=auth.project_ids,
+    )
+    return schemas.PortalDepartmentStatsResponse(
+        group_key=group_key,
+        stats=schemas.DepartmentStatsBucket(**{k: bucket[k] for k in ("total", "byStatus", "byYear")}),
+        projects=[_project_to_dept_list_item(p, dimension) for p in projects],
+    )
 
 
 @app.get("/api/portal/projects", response_model=List[schemas.ProjectResponse])

@@ -317,3 +317,48 @@ class PriorityStatsResponse(BaseModel):
     C: int = 0
     unset: int = 0
     total: int = 0
+
+
+# ---- 部门统计 Schema ----
+
+class DepartmentStatsBucket(BaseModel):
+    total: int = 0
+    byStatus: dict = Field(default_factory=dict)
+    byYear: dict = Field(default_factory=dict)
+
+
+class DepartmentStatsGroup(DepartmentStatsBucket):
+    key: str
+
+
+class DepartmentStatsResponse(BaseModel):
+    dimension: str
+    range: str
+    year: Optional[int] = None
+    start: Optional[str] = None
+    end: Optional[str] = None
+    include_completed: bool = True
+    overall: DepartmentStatsBucket
+    groups: List[DepartmentStatsGroup]
+
+
+class DepartmentProjectListItem(BaseModel):
+    id: UUID
+    title: str
+    status: str
+    leader: Optional[str] = None
+    department: Optional[str] = None
+    project_code: Optional[str] = None
+    created_at: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    groups: List[str] = []
+
+    class Config:
+        from_attributes = True
+
+
+class PortalDepartmentStatsResponse(BaseModel):
+    """Portal 精简版：单分组 + 项目列表"""
+    group_key: str
+    stats: DepartmentStatsBucket
+    projects: List[DepartmentProjectListItem]

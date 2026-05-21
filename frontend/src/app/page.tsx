@@ -14,7 +14,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Search, Calendar, CheckCircle2, ChevronRight, Database, Clock, User, FileSpreadsheet, FileArchive, AlertCircle, FileUp, ArrowUpDown, Check, Gauge } from 'lucide-react';
+import { Search, Calendar, CheckCircle2, ChevronRight, Database, Clock, User, FileSpreadsheet, FileArchive, AlertCircle, FileUp, ArrowUpDown, Check, Gauge, BarChart3 } from 'lucide-react';
+import Link from 'next/link';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
@@ -59,6 +60,21 @@ export default function DashboardPage() {
     fetchProjects();
     fetchPriorityStats();
   }, [fetchProjects, fetchPriorityStats]);
+
+  // 支持 /#section-xxx 锚点跳转（来自部门统计的 KPI 卡片）
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const hash = window.location.hash;
+    if (!hash) return;
+    // 等待 DOM 渲染完成（项目列表加载后元素才出现）
+    const t = setTimeout(() => {
+      const el = document.querySelector(hash);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [loading]);
 
   const handleDownloadAutoScoreCsv = () => {
     toast.promise(downloadAutoScoreCsv(), {
@@ -124,6 +140,13 @@ export default function DashboardPage() {
             项目调度中枢
           </h1>
           <p className="text-muted-foreground mt-1">富于学,钢于行</p>
+          <Link
+            href="/departments"
+            className="inline-flex items-center gap-1.5 text-sm text-emerald-600 hover:text-emerald-700 mt-2 font-medium"
+          >
+            <BarChart3 className="h-4 w-4" />
+            查看部门统计 →
+          </Link>
         </div>
         
         <div className="flex w-full md:w-auto items-center gap-3 flex-wrap">
@@ -279,7 +302,7 @@ export default function DashboardPage() {
       ) : (
         <>
           {/* 实施中项目 */}
-          <section className="space-y-4">
+          <section id="section-in-progress" className="space-y-4 scroll-mt-24">
             <h2 className="text-xl font-semibold flex items-center gap-2">
               <div className="h-3 w-3 rounded-full bg-blue-500 animate-pulse"></div>
               实施中 <span className="text-sm font-normal text-muted-foreground ml-1">({inProgressProjects.length} 项)</span>
@@ -303,7 +326,7 @@ export default function DashboardPage() {
 
           {/* 暂停中项目 */}
           {(pausedProjects.length > 0) && (
-            <section className="space-y-4 pt-2">
+            <section id="section-paused" className="space-y-4 pt-2 scroll-mt-24">
               <h2 className="text-xl font-semibold flex items-center gap-2 text-red-500">
                 <AlertCircle className="h-5 w-5" />
                 暂停中 <span className="text-sm font-normal text-muted-foreground ml-1">({pausedProjects.length} 项)</span>
@@ -322,7 +345,7 @@ export default function DashboardPage() {
 
           {/* 待结项项目 */}
           {(pendingProjects.length > 0 || searchInput) && (
-            <section className="space-y-4 pt-2">
+            <section id="section-pending" className="space-y-4 pt-2 scroll-mt-24">
               <h2 className="text-xl font-semibold flex items-center gap-2 text-amber-500">
                 <Clock className="h-5 w-5" />
                 已完成 <span className="text-sm font-normal text-muted-foreground ml-1">({pendingProjects.length} 项，等待结项归档)</span>
@@ -348,7 +371,7 @@ export default function DashboardPage() {
 
           {/* 已完成归档 */}
           {completedProjects.length > 0 && (
-            <section className="space-y-4 pt-2 border-t border-border/50">
+            <section id="section-completed" className="space-y-4 pt-2 border-t border-border/50 scroll-mt-24">
               <h2 className="text-xl font-semibold flex items-center gap-2 text-muted-foreground">
                  <CheckCircle2 className="h-5 w-5" />
                  已结项归档 <span className="text-sm font-normal ml-1">({completedProjects.length} 项)</span>

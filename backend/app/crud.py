@@ -1,9 +1,15 @@
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_, and_, func
 from uuid import UUID
-from datetime import datetime, timedelta
-from typing import Optional
+from datetime import datetime, timedelta, date
+from typing import Optional, List, Dict, Any
 from . import models, schemas
+from .constants import (
+    DEPARTMENT_GROUP_KEYS,
+    OTHER_GROUP,
+    STATUS_KEYS,
+    classify_project_groups,
+)
 
 # "最近固化"摘要的内容截断长度（单位：字符），超过则追加省略号
 LATEST_UPDATE_SUMMARY_LIMIT = 30
@@ -706,3 +712,218 @@ def get_all_change_logs(db: Session, limit: int = 100):
     ).order_by(
         models.ProjectChangeLog.created_at.desc()
     ).limit(limit).all()
+
+
+# ---- 部门统计 ----
+
+def _status_label(p: models.Project) -> str:
+    if p.status is None:
+        return "实施中"
+    return p.status.value if hasattr(p.status, "value") else str(p.status)
+
+
+def project_attributed_year(p: models.Project) -> int:
+    """已结项按 end_date 年份；其余按当前年（跨年自动滚动）。"""
+    if p.status == models.ProjectStatus.completed and p.end_date:
+        return p.end_date.year
+    return datetime.utcnow().year
+
+
+def _parse_date(s: Optional[str]) -> Optional[date]:
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def project_passes_time_filter(
+    p: models.Project,
+    range_mode: str,
+    year: Optional[int],
+    start: Optional[date],
+    end: Optional[date],
+) -> bool:
+    if range_mode == "all":
+        return True
+    if range_mode == "year" and year is not None:
+        return project_attributed_year(p) == year
+    if range_mode == "last_year":
+        return project_attributed_year(p) == datetime.utcnow().year - 1
+    if range_mode == "custom" and start and end:
+        if p.status == models.ProjectStatus.completed and p.end_date:
+            d = p.end_date.date() if hasattr(p.end_date, "date") else p.end_date
+            return start <= d <= end
+        if p.created_at:
+            d = p.created_at.date() if hasattr(p.created_at, "date") else p.created_at
+            return start <= d <= end
+        return False
+    return True
+
+
+def filter_projects_for_department_stats(
+    projects: List[models.Project],
+    *,
+    include_completed: bool,
+    range_mode: str,
+    year: Optional[int],
+    start: Optional[date],
+    end: Optional[date],
+) -> List[models.Project]:
+    out = []
+    for p in projects:
+        if not include_completed and p.status == models.ProjectStatus.completed:
+            continue
+        if not project_passes_time_filter(p, range_mode, year, start, end):
+            continue
+        out.append(p)
+    return out
+
+
+def _empty_bucket() -> Dict[str, Any]:
+    return {
+        "total": 0,
+        "byStatus": {k: 0 for k in STATUS_KEYS},
+        "byYear": {},
+    }
+
+
+def _add_to_bucket(bucket: Dict[str, Any], p: models.Project) -> None:
+    bucket["total"] += 1
+    st = _status_label(p)
+    if st in bucket["byStatus"]:
+        bucket["byStatus"][st] += 1
+    y = str(project_attributed_year(p))
+    bucket["byYear"][y] = bucket["byYear"].get(y, 0) + 1
+
+
+def aggregate_department_stats(
+    db: Session,
+    *,
+    dimension: str = "department",
+    range_mode: str = "all",
+    year: Optional[int] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    include_completed: bool = True,
+    project_ids: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    聚合部门统计。overall + 8 个分组。
+    project_ids 非空时仅统计这些项目（Portal 精简版）。
+    """
+    start_d = _parse_date(start)
+    end_d = _parse_date(end)
+    if range_mode == "year" and year is None:
+        year = datetime.utcnow().year
+
+    all_projects = db.query(models.Project).all()
+    if project_ids is not None:
+        id_set = {str(x) for x in project_ids}
+        all_projects = [p for p in all_projects if str(p.id) in id_set]
+
+    filtered = filter_projects_for_department_stats(
+        all_projects,
+        include_completed=include_completed,
+        range_mode=range_mode,
+        year=year,
+        start=start_d,
+        end=end_d,
+    )
+
+    overall = _empty_bucket()
+    groups_map = {k: _empty_bucket() for k in DEPARTMENT_GROUP_KEYS}
+
+    for p in filtered:
+        _add_to_bucket(overall, p)
+        keys = classify_project_groups(
+            p.department,
+            p.improvement_site,
+            dimension=dimension,
+        )
+        for g in keys:
+            if g in groups_map:
+                _add_to_bucket(groups_map[g], p)
+
+    groups = [{"key": k, **groups_map[k]} for k in DEPARTMENT_GROUP_KEYS]
+
+    return {
+        "dimension": dimension,
+        "range": range_mode,
+        "year": year,
+        "start": start,
+        "end": end,
+        "include_completed": include_completed,
+        "overall": overall,
+        "groups": groups,
+    }
+
+
+def list_department_group_projects(
+    db: Session,
+    group_key: str,
+    *,
+    dimension: str = "department",
+    range_mode: str = "all",
+    year: Optional[int] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    include_completed: bool = True,
+    project_ids: Optional[List[str]] = None,
+) -> List[models.Project]:
+    """返回某分组下的项目列表（去重）。"""
+    start_d = _parse_date(start)
+    end_d = _parse_date(end)
+    if range_mode == "year" and year is None:
+        year = datetime.utcnow().year
+
+    all_projects = db.query(models.Project).order_by(models.Project.created_at.desc()).all()
+    if project_ids is not None:
+        id_set = {str(x) for x in project_ids}
+        all_projects = [p for p in all_projects if str(p.id) in id_set]
+
+    filtered = filter_projects_for_department_stats(
+        all_projects,
+        include_completed=include_completed,
+        range_mode=range_mode,
+        year=year,
+        start=start_d,
+        end=end_d,
+    )
+
+    result = []
+    seen_ids = set()
+    for p in filtered:
+        keys = classify_project_groups(
+            p.department,
+            p.improvement_site,
+            dimension=dimension,
+        )
+        if group_key not in keys:
+            continue
+        pid = str(p.id)
+        if pid in seen_ids:
+            continue
+        seen_ids.add(pid)
+        result.append(p)
+    return result
+
+
+def infer_portal_user_group(
+    db: Session,
+    name: str,
+    project_ids: List[str],
+    dimension: str = "department",
+) -> str:
+    """Portal：从用户可访问项目中取出现次数最多的分组。"""
+    from collections import Counter
+    id_set = {str(x) for x in project_ids}
+    all_p = [p for p in db.query(models.Project).all() if str(p.id) in id_set]
+    counter: Counter = Counter()
+    for p in all_p:
+        for g in classify_project_groups(p.department, p.improvement_site, dimension=dimension):
+            counter[g] += 1
+    if counter:
+        return counter.most_common(1)[0][0]
+    return OTHER_GROUP
